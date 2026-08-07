@@ -1,0 +1,8 @@
+# 不要推到 GitHub 的内容
+.workbuddy/
+*.log
+.DS_Store
+.git/
+
+# 构建产物（由 CI 生成，勿手传）
+bb-plugin/*.dylib
