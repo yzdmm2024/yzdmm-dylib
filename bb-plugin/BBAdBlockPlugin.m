@@ -1,15 +1,16 @@
 //
 //  BBAdBlockPlugin.m
 //  内部专用工具插件（通用 iOS hook，干净实现，不依赖任何第三方二进制）：
-//   1. 广告加速       (adSpeedEnabled)          —— 通用 hook：把 AVPlayer 播放速率调高
-//   2. 防止跳转浏览器 (blockBrowserEnabled)      —— 通用 hook：拦截 UIApplication openURL:
-//   3. 跳过开屏广告   (skipSplashEnabled)        —— 扫描并点掉「跳过/Skip」按钮、移除全屏广告视图
-//   4. 拦截广告域名   (blockAdDomainEnabled)     —— 拦截常见广告 SDK 域名（域名表借鉴公开去广告思路）
+//   1. 广告加速       (adSpeedEnabled)   —— 开启时同时做三件事：
+//                                             ① 视频广告倍速播放
+//                                             ② 自动跳过开屏广告（点掉「跳过」按钮 / 移除全屏广告视图）
+//                                             ③ 拦截常见广告 SDK 域名
+//   2. 防止跳转浏览器 (blockBrowserEnabled) —— 拦截 UIApplication openURL: 系列，阻止跳出到浏览器
 //
 //  运行方式：纯 Objective-C runtime 方法交换，不依赖 Cydia Substrate / ElleKit，
 //  因此【非越狱自签注入】也能工作（把本 dylib 注入目标 App 并重签即可）。
 //
-//  四个开关默认关闭，App 内悬浮窗手动开启，运行时即时生效（无需重启）。
+//  两个开关默认关闭，App 内悬浮窗手动开启，运行时即时生效（无需重启）。
 //
 
 #import <UIKit/UIKit.h>
@@ -18,15 +19,13 @@
 
 #pragma mark - 配置（NSUserDefaults，默认关闭，运行时即时读取）
 
-static NSString *const kBBAdSpeedKey       = @"BB_adSpeedEnabled";
-static NSString *const kBBBlockBrowserKey  = @"BB_blockBrowserEnabled";
-static NSString *const kBBSkipSplashKey     = @"BB_skipSplashEnabled";
-static NSString *const kBBBlockAdDomainKey = @"BB_blockAdDomainEnabled";
+static NSString *const kBBAdSpeedKey       = @"BB_adSpeedEnabled";       // 广告加速（含开屏跳过 + 域名拦截）
+static NSString *const kBBBlockBrowserKey  = @"BB_blockBrowserEnabled";  // 防止跳转浏览器
 
 // 广告加速倍速：把视频广告按此倍速播放（30 秒广告 ≈ 30/倍速 秒看完）
 static const float kBBAdSpeedRate = 16.0f;
 
-// 广告 SDK 域名黑名单（用于「拦截广告域名」开关，借鉴公开去广告域名清单）
+// 广告 SDK 域名黑名单（用于「广告加速」开关开启时的域名拦截，借鉴公开去广告域名清单）
 static NSArray<NSString *> *kBBAdDomains(void) {
     static NSArray *list;
     static dispatch_once_t once;
@@ -70,12 +69,6 @@ static BOOL bbAdSpeedEnabled(void) {
 static BOOL bbBlockBrowserEnabled(void) {
     return [[NSUserDefaults standardUserDefaults] boolForKey:kBBBlockBrowserKey];
 }
-static BOOL bbSkipSplashEnabled(void) {
-    return [[NSUserDefaults standardUserDefaults] boolForKey:kBBSkipSplashKey];
-}
-static BOOL bbBlockAdDomainEnabled(void) {
-    return [[NSUserDefaults standardUserDefaults] boolForKey:kBBBlockAdDomainKey];
-}
 static void bbSetAdSpeed(BOOL on) {
     [[NSUserDefaults standardUserDefaults] setBool:on forKey:kBBAdSpeedKey];
     [[NSUserDefaults standardUserDefaults] synchronize];
@@ -84,16 +77,8 @@ static void bbSetBlockBrowser(BOOL on) {
     [[NSUserDefaults standardUserDefaults] setBool:on forKey:kBBBlockBrowserKey];
     [[NSUserDefaults standardUserDefaults] synchronize];
 }
-static void bbSetSkipSplash(BOOL on) {
-    [[NSUserDefaults standardUserDefaults] setBool:on forKey:kBBSkipSplashKey];
-    [[NSUserDefaults standardUserDefaults] synchronize];
-}
-static void bbSetBlockAdDomain(BOOL on) {
-    [[NSUserDefaults standardUserDefaults] setBool:on forKey:kBBBlockAdDomainKey];
-    [[NSUserDefaults standardUserDefaults] synchronize];
-}
 
-// 判断 URL 是否命中广告域名
+// 判断 URL 是否命中广告域名（仅当「广告加速」开启时生效）
 static BOOL bbIsAdDomain(NSURL *url) {
     NSString *host = [url.host lowercaseString];
     if (!host.length) return NO;
@@ -115,7 +100,7 @@ static void bb_swizzle(Class cls, SEL orig, SEL repl) {
 
 #pragma mark - 防止跳转浏览器 / 拦截广告域名：hook UIApplication openURL: 系列
 
-@implementation UIApplication (BBBlockBrowser)
+@implementation UIApplication (BBBlock)
 
 - (void)bb_openURL:(NSURL *)url
            options:(NSDictionary<NSString *, id> *)options
@@ -125,7 +110,7 @@ static void bb_swizzle(Class cls, SEL orig, SEL repl) {
         if (completion) completion(NO);
         return;
     }
-    if (bbBlockAdDomainEnabled() && bbIsAdDomain(url)) { // 拦截广告域名
+    if (bbAdSpeedEnabled() && bbIsAdDomain(url)) {       // 广告加速开启时，拦截广告域名
         if (completion) completion(NO);
         return;
     }
@@ -135,13 +120,13 @@ static void bb_swizzle(Class cls, SEL orig, SEL repl) {
 - (void)bb_openURL:(NSURL *)url
            options:(NSDictionary<NSString *, id> *)options {
     if (bbBlockBrowserEnabled()) return;
-    if (bbBlockAdDomainEnabled() && bbIsAdDomain(url)) return;
+    if (bbAdSpeedEnabled() && bbIsAdDomain(url)) return;
     [self bb_openURL:url options:options];
 }
 
 - (BOOL)bb_openURLSimple:(NSURL *)url {
     if (bbBlockBrowserEnabled()) return NO;
-    if (bbBlockAdDomainEnabled() && bbIsAdDomain(url)) return NO;
+    if (bbAdSpeedEnabled() && bbIsAdDomain(url)) return NO;
     return [self bb_openURLSimple:url];
 }
 
@@ -172,7 +157,7 @@ static void bb_swizzle(Class cls, SEL orig, SEL repl) {
 
 @end
 
-#pragma mark - App 内悬浮窗（四个开关，默认关闭，可拖拽）
+#pragma mark - App 内悬浮窗（两个开关，默认关闭，可拖拽）
 
 @interface BBFloatingPanel : NSObject
 @property (nonatomic, strong) UIButton *fab;
@@ -238,7 +223,7 @@ static void bb_swizzle(Class cls, SEL orig, SEL repl) {
 }
 
 - (void)buildPanel {
-    _panel = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 240, 244)];
+    _panel = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 240, 156)];
     _panel.backgroundColor = [UIColor colorWithRed:0.12 green:0.12 blue:0.16 alpha:0.96];
     _panel.layer.cornerRadius = 14;
     _panel.layer.masksToBounds = YES;
@@ -252,8 +237,6 @@ static void bb_swizzle(Class cls, SEL orig, SEL repl) {
 
     [_panel addSubview:[self rowWithY:48 title:@"广告加速"        key:kBBAdSpeedKey       initial:bbAdSpeedEnabled()       action:@selector(adSpeedChanged:)]];
     [_panel addSubview:[self rowWithY:96 title:@"防止跳转浏览器"  key:kBBBlockBrowserKey  initial:bbBlockBrowserEnabled()  action:@selector(blockChanged:)]];
-    [_panel addSubview:[self rowWithY:144 title:@"跳过开屏广告"    key:kBBSkipSplashKey     initial:bbSkipSplashEnabled()     action:@selector(skipChanged:)]];
-    [_panel addSubview:[self rowWithY:192 title:@"拦截广告域名"    key:kBBBlockAdDomainKey  initial:bbBlockAdDomainEnabled()  action:@selector(adDomainChanged:)]];
 
     UIButton *close = [UIButton buttonWithType:UIButtonTypeCustom];
     close.frame = CGRectMake(200, 12, 28, 22);
@@ -273,8 +256,7 @@ static void bb_swizzle(Class cls, SEL orig, SEL repl) {
 
     UISwitch *sw = [[UISwitch alloc] initWithFrame:CGRectMake(176, 6, 51, 31)];
     sw.on = initial;
-    sw.tag = (key == kBBAdSpeedKey) ? 1 : (key == kBBBlockBrowserKey) ? 2 :
-             (key == kBBSkipSplashKey) ? 3 : 4;
+    sw.tag = (key == kBBAdSpeedKey) ? 1 : 2;
     [sw addTarget:self action:action forControlEvents:UIControlEventValueChanged];
     [row addSubview:sw];
     return row;
@@ -282,8 +264,6 @@ static void bb_swizzle(Class cls, SEL orig, SEL repl) {
 
 - (void)adSpeedChanged:(UISwitch *)sw     { bbSetAdSpeed(sw.on); }
 - (void)blockChanged:(UISwitch *)sw       { bbSetBlockBrowser(sw.on); }
-- (void)skipChanged:(UISwitch *)sw        { bbSetSkipSplash(sw.on); }
-- (void)adDomainChanged:(UISwitch *)sw    { bbSetBlockAdDomain(sw.on); }
 
 - (void)fabTapped {
     self.panel.hidden = !self.panel.hidden;
@@ -329,6 +309,7 @@ static void bb_swizzle(Class cls, SEL orig, SEL repl) {
 }
 
 #pragma mark - 跳过开屏广告：定时扫描 keyWindow，点掉「跳过」按钮、移除全屏广告视图
+// 仅当「广告加速」开启时生效（并入广告加速开关）
 
 - (void)startSplashTimer {
     [NSTimer scheduledTimerWithTimeInterval:0.5
@@ -339,7 +320,7 @@ static void bb_swizzle(Class cls, SEL orig, SEL repl) {
 }
 
 - (void)bb_splashTick:(NSTimer *)timer {
-    if (bbSkipSplashEnabled()) [self bb_scanSplash];
+    if (bbAdSpeedEnabled()) [self bb_scanSplash];
 }
 
 - (void)bb_scanSplash {
