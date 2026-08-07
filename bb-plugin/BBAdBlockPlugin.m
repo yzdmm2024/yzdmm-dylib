@@ -1,6 +1,6 @@
 //
 //  BBAdBlockPlugin.m
-//  从「老贝贝连点器 v5.0.2」中提取的两个功能（干净重写，不复制原二进制）：
+//  内部专用工具插件（通用 iOS hook，干净实现，不依赖任何第三方二进制）：
 //   1. 广告加速  (adSpeedEnabled)         —— 通用 hook：把 AVPlayer 播放速率调高
 //   2. 防止跳转浏览器 (blockBrowserEnabled) —— 通用 hook：拦截 UIApplication openURL:
 //
@@ -173,7 +173,7 @@ static void bb_swizzle(Class cls, SEL orig, SEL repl) {
     _panel.hidden = YES;
 
     UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(14, 12, 212, 22)];
-    title.text = @"老贝贝·提取版";
+    title.text = @"内部专用";
     title.textColor = [UIColor whiteColor];
     title.font = [UIFont boldSystemFontOfSize:16];
     [_panel addSubview:title];
@@ -255,10 +255,10 @@ static void bb_swizzle(Class cls, SEL orig, SEL repl) {
 
 #pragma mark - 入口：+load 时完成交换并弹出悬浮窗
 
-@interface BBExtractPlugin : NSObject
+@interface BBInternalPlugin : NSObject
 @end
 
-@implementation BBExtractPlugin
+@implementation BBInternalPlugin
 
 + (void)load {
     @autoreleasepool {
