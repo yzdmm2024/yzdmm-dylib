@@ -1,21 +1,21 @@
-// WetypePlus 3.0.1 — 注入微信输入法键盘扩展进程，用工具栏替换顶部图标行。
+// WetypePlus 3.0.2 — 注入微信输入法键盘扩展进程，用工具栏替换顶部图标行(WBTopBar)。
 //
-// 布局关键：工具栏加进键盘的 view(vc.view)，占据原"图标行"的位置(y=0, h=图标行高度)，
-// 并把图标行里的所有 subview 隐藏。这样视觉上无缝替代——QWERTYUIOP 仍紧贴工具栏底边，
-// 不影响键盘总高度、不压任何按键、不压输入框。
+// 关键修正（相对 3.0.1）：
+//   3.0.1 的 probeIconBarIn: 只查 vc.view 的「直接子视图」，但图标行的真实类名是
+//   WBTopBar，它埋在 7 层嵌套里(UIInputView->_UIInputViewContent->WBRootInputView->
+//   WBMainInputView->WBTopBar)，永远不是直接子视图 → 永远命中不了 → 退化成 y=0/38pt
+//   固定条，而真正的图标行(嵌套子视图)也在 y≈0 → 视觉重叠 == "还是一样"。
+//   另外本扩展里 vc.view.frame 全为 0，导致之前的宽度判据也失效。
 //
-// 上一版 3.0.0 把工具栏放在 vc.view.window / 键盘顶边之上的空隙里，结果压到了微信键盘
-// 顶部的"按住说话/语音/AI/键盘切换"那排圆形图标按钮，看着糊。
-//
-// 关键 hook：viewDidLayoutSubviews 内首次探查顶部"图标行"，记下其高度并把所有 subview 隐藏。
-// 因为不能用 frida 在真机调试，启发式判据：y<5、高度 28~55、子视图>=3、宽度接近满屏。
+//   3.0.2：在 vc.view 上「递归」查找，按类名精确匹配 WBTopBar（frida 已实锤该名字）；
+//   命中后读它的真实 frame，把工具栏加进它「同一个父视图」(同坐标系)，并把 WBTopBar
+//   的所有 subview 递归 hidden。不再依赖 vc.view.frame。真实几何写进 wp_geo.log 供核对。
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 
 #define WP_DOMAIN @"com.yzdmm.wetypeplus"
 #define WP_NOTE   CFSTR("com.yzdmm.wetypeplus.changed")
-// 工具栏高度：若图标行探查成功则取图标行高度，否则用 38 兜底。
 #define WP_BAR_H_DEFAULT 38
 
 static BOOL wp_enabled = YES;
@@ -41,12 +41,10 @@ static void wp_hapticBump() {
     [g selectionChanged];
 }
 
-// 把诊断信息写到一行 log（追加），方便真机反馈时定位布局问题。
-static void wp_diag(NSString *line) {
-    NSString *path = @"/var/mobile/wp_kb_loaded.log";
+static void wp_log(NSString *file, NSString *line) {
     NSString *stamp = [NSString stringWithFormat:@"[%@] %@\n", [NSDate date], line];
-    NSString *cur = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil] ?: @"";
-    [[cur stringByAppendingString:stamp] writeToFile:path
+    NSString *cur = [NSString stringWithContentsOfFile:file encoding:NSUTF8StringEncoding error:nil] ?: @"";
+    [[cur stringByAppendingString:stamp] writeToFile:file
                                           atomically:YES
                                             encoding:NSUTF8StringEncoding
                                                error:nil];
@@ -61,6 +59,7 @@ static void wp_diag(NSString *line) {
 @implementation WPToolbar {
     __weak UIInputViewController *_vc;
     BOOL _built;
+    BOOL _geoLogged;
 }
 
 + (WPToolbar *)shared {
@@ -77,6 +76,7 @@ static void wp_diag(NSString *line) {
         self.hidden = YES;
         self.userInteractionEnabled = YES;
         _built = NO;
+        _geoLogged = NO;
     }
     return self;
 }
@@ -107,92 +107,131 @@ static void wp_diag(NSString *line) {
 - (void)attachTo:(UIInputViewController *)vc {
     _vc = vc;
     [self buildIfNeeded];
-    if (vc.view && self.superview != vc.view) {
-        [vc.view addSubview:self];
-    }
     self.hidden = NO;
 }
 
-// 找顶部"图标行"（y≈0、高度 28~55、子视图>=3、宽度接近满屏），返回第一个匹配的。
-// 若用 NSClassFromString 探不到 WTypeTopBar 之类私有类，只能用启发式 fallback。
-- (UIView *)probeIconBarIn:(UIView *)v {
-    UIView *cur = nil;
-    CGFloat screenW = v.bounds.size.width;
-    for (UIView *sub in v.subviews) {
-        if (sub == self) continue;
-        CGRect f = sub.frame;
-        BOOL atTop = fabs(f.origin.y) < 2;
-        BOOL iconHeight = f.size.height > 28 && f.size.height < 55;
-        BOOL wideEnough = f.size.width >= screenW * 0.95;
-        BOOL hasChildren = sub.subviews.count >= 3;
-        if (atTop && iconHeight && wideEnough && hasChildren) {
-            cur = sub;
-            break;
-        }
+// 递归在 view 树里找指定类名的子视图（不限于直接子视图）。
+- (UIView *)findClass:(NSString *)clsName inView:(UIView *)v depth:(int)d {
+    if (!v || d > 24) return nil;
+    NSString *cn = NSStringFromClass(v.class);
+    if ([cn isEqualToString:clsName]) return v;
+    for (UIView *s in v.subviews) {
+        UIView *r = [self findClass:clsName inView:s depth:d + 1];
+        if (r) return r;
     }
-    if (!cur) {
-        // 兜底：放宽"子视图数"约束（部分键盘图标行只有一个容器 view）
-        for (UIView *sub in v.subviews) {
-            if (sub == self) continue;
-            CGRect f = sub.frame;
-            if (fabs(f.origin.y) < 2 && f.size.height > 28 && f.size.height < 55
-                && f.size.width >= screenW * 0.95) {
-                cur = sub;
-                break;
-            }
-        }
-    }
-    return cur;
+    return nil;
 }
 
-// 占据图标行原位置；同时隐藏图标行内所有 subview，但保留图标行 view 的 frame
-// （键盘总高度/布局不会因此变化）。
+// 递归在 view 树里找「类名含子串」的子视图，优先返回最靠上(y 最小)的。
+- (UIView *)findClassContains:(NSString *)sub inView:(UIView *)v depth:(int)d bestY:(CGFloat *)bestY {
+    if (!v || d > 24) return nil;
+    NSString *cn = NSStringFromClass(v.class);
+    UIView *found = nil;
+    if ([cn rangeOfString:sub].location != NSNotFound) {
+        CGRect f = v.frame;
+        if (f.size.height > 20 && f.size.height < 70 && f.size.width > 200) {
+            if (!found || f.origin.y < *bestY) { found = v; *bestY = f.origin.y; }
+        }
+    }
+    for (UIView *s in v.subviews) {
+        UIView *r = [self findClassContains:sub inView:s depth:d + 1 bestY:bestY];
+        if (r) found = r;
+    }
+    return found;
+}
+
 - (void)relayoutReplacingIconBar {
     UIInputViewController *vc = _vc;
-    if (!vc || !vc.view) { self.hidden = YES; return; }
-    UIView *v = vc.view;
+    if (!vc) { self.hidden = YES; return; }
+    UIView *root = vc.view;
+    if (!root) { self.hidden = YES; return; }
 
-    UIView *iconBar = objc_getAssociatedObject(v, "wp.iconBar");
+    UIView *iconBar = objc_getAssociatedObject(root, "wp.iconBar");
+    NSString *how = objc_getAssociatedObject(root, "wp.iconBarHow");
     if (!iconBar) {
-        iconBar = [self probeIconBarIn:v];
+        // 1) 精确匹配 frida 实锤的 WBTopBar
+        iconBar = [self findClass:@"WBTopBar" inView:root depth:0];
+        how = @"WBTopBar";
+        // 2) 退而求其次：类名含 TopBar
+        if (!iconBar) {
+            CGFloat bestY = 1e9;
+            iconBar = [self findClassContains:@"TopBar" inView:root depth:0 bestY:&bestY];
+            how = @"*TopBar*";
+        }
+        // 3) 再退化：递归找顶部、高度 28~55、宽>200、子视图>=3 的第一条
+        if (!iconBar) {
+            iconBar = [self findIconHeuristicIn:root depth:0 bestY:&(CGFloat){1e9}];
+            how = @"heuristic";
+        }
         if (iconBar) {
-            objc_setAssociatedObject(v, "wp.iconBar", iconBar,
-                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            wp_diag([NSString stringWithFormat:@"probed iconBar=%@ frame={%.1f,%.1f,%.1f,%.1f} subviews=%lu",
-                     NSStringFromClass(iconBar.class),
-                     iconBar.frame.origin.x, iconBar.frame.origin.y,
-                     iconBar.frame.size.width, iconBar.frame.size.height,
-                     (unsigned long)iconBar.subviews.count]);
+            objc_setAssociatedObject(root, "wp.iconBar", iconBar, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(root, "wp.iconBarHow", how, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            CGRect f = iconBar.frame;
+            wp_log(@"/var/mobile/wp_geo.log",
+                   [NSString stringWithFormat:@"FOUND iconBar via %@ class=%@ frame={%.1f,%.1f,%.1f,%.1f} subviews=%lu",
+                    how, NSStringFromClass(iconBar.class),
+                    f.origin.x, f.origin.y, f.size.width, f.size.height,
+                    (unsigned long)iconBar.subviews.count]);
         } else {
-            wp_diag(@"NO iconBar matched in keyboard view");
+            wp_log(@"/var/mobile/wp_geo.log", @"NO iconBar found (all strategies failed)");
         }
     }
 
-    if (self.superview != v) [v addSubview:self];
-    [v bringSubviewToFront:self];
-
-    CGRect barRect;
-    if (iconBar) {
-        // 用图标行原位
-        CGRect f = iconBar.frame;
-        barRect = CGRectMake(0, 0, f.size.width, f.size.height);
-        // 隐藏图标行内容
-        iconBar.hidden = NO;
-        for (UIView *sub in iconBar.subviews) sub.hidden = YES;
-        objc_setAssociatedObject(v, "wp.iconBarH", @(f.size.height),
-                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    } else {
-        // 没找到图标行——退回到顶部固定高度
-        barRect = CGRectMake(0, 0, v.bounds.size.width, WP_BAR_H_DEFAULT);
+    if (!iconBar) {
+        // 实在找不到：退回顶部固定 38pt（至少可见，不保证不重叠）
+        if (self.superview != root) [root addSubview:self];
+        [root bringSubviewToFront:self];
+        if (!CGRectEqualToRect(self.frame, CGRectMake(0, 0, root.bounds.size.width, WP_BAR_H_DEFAULT))) {
+            self.frame = CGRectMake(0, 0, root.bounds.size.width, WP_BAR_H_DEFAULT);
+            _built = NO; for (UIView *s in [self.subviews copy]) [s removeFromSuperview]; [self buildIfNeeded];
+        }
+        return;
     }
 
+    // 加进图标行「同一个父视图」，坐标系一致，frame 直接取图标行原位。
+    UIView *host = iconBar.superview ?: root;
+    if (self.superview != host) [host addSubview:self];
+    [host bringSubviewToFront:self];
+
+    CGRect f = iconBar.frame;
+    CGRect barRect = CGRectMake(f.origin.x, f.origin.y, f.size.width, f.size.height);
     if (!CGRectEqualToRect(self.frame, barRect)) {
         self.frame = barRect;
-        // 重建按钮以匹配新高度
-        _built = NO;
-        for (UIView *sub in [self.subviews copy]) [sub removeFromSuperview];
-        [self buildIfNeeded];
+        _built = NO; for (UIView *s in [self.subviews copy]) [s removeFromSuperview]; [self buildIfNeeded];
     }
+
+    // 隐藏图标行内容（递归），视觉上由工具栏无缝替代。
+    [self hideAllSubviewsOf:iconBar];
+
+    if (!_geoLogged) {
+        _geoLogged = YES;
+        wp_log(@"/var/mobile/wp_geo.log",
+               [NSString stringWithFormat:@"APPLIED toolbar frame={%.1f,%.1f,%.1f,%.1f} host=%@",
+                self.frame.origin.x, self.frame.origin.y, self.frame.size.width, self.frame.size.height,
+                NSStringFromClass(host.class)]);
+    }
+}
+
+- (void)hideAllSubviewsOf:(UIView *)v {
+    for (UIView *s in v.subviews) {
+        s.hidden = YES;
+        [self hideAllSubviewsOf:s];
+    }
+}
+
+// 递归启发式：找顶部(最小 y)、高度 28~55、宽>200、子视图>=3 的第一条 view。
+- (UIView *)findIconHeuristicIn:(UIView *)v depth:(int)d bestY:(CGFloat *)bestY {
+    if (!v || d > 24) return nil;
+    UIView *best = nil;
+    CGRect f = v.frame;
+    if (f.size.height > 28 && f.size.height < 55 && f.size.width > 200 && v.subviews.count >= 3) {
+        if (f.origin.y < *bestY) { *bestY = f.origin.y; best = v; }
+    }
+    for (UIView *s in v.subviews) {
+        UIView *r = [self findIconHeuristicIn:s depth:d + 1 bestY:bestY];
+        if (r) best = r;
+    }
+    return best;
 }
 
 - (void)onTap:(UIButton *)b {
@@ -242,14 +281,9 @@ static const void *kWpSetupDone = &kWpSetupDone;
 %ctor {
     @autoreleasepool {
         wp_loadPrefs();
-        NSString *mark = [NSString stringWithFormat:@"[ctor] WetypePlus(KEYBOARD) loaded in %@ at %@\n",
-            ([[NSBundle mainBundle] bundleIdentifier] ?: @"?"), [NSDate date]];
-        NSString *cur = [NSString stringWithContentsOfFile:@"/var/mobile/wp_kb_loaded.log"
-                                                  encoding:NSUTF8StringEncoding error:nil] ?: @"";
-        [[cur stringByAppendingString:mark] writeToFile:@"/var/mobile/wp_kb_loaded.log"
-                                              atomically:YES
-                                                encoding:NSUTF8StringEncoding
-                                                   error:nil];
+        wp_log(@"/var/mobile/wp_kb_loaded.log",
+               [NSString stringWithFormat:@"[ctor] WetypePlus(KEYBOARD) loaded in %@ at %@",
+                ([[NSBundle mainBundle] bundleIdentifier] ?: @"?"), [NSDate date]]);
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDarwinNotifyCenter(), NULL,
             (CFNotificationCallback)wp_notifyCallback,
