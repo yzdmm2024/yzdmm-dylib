@@ -40,6 +40,12 @@ static void wp_hapticBump() {
     [g selectionChanged];
 }
 
+// 监听设置变更的回调（必须是 C 函数，ARC 不允许把 block 转成 CFNotificationCallback）
+static void wp_notifyCallback(CFNotificationCenterRef center, void *observer,
+                              CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    wp_loadPrefs();
+}
+
 @interface WPToolbar : UIView
 + (WPToolbar *)shared;
 - (void)showAbove:(CGRect)kbFrame;
@@ -142,9 +148,8 @@ static void wp_hapticBump() {
         wp_loadPrefs();
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDarwinNotifyCenter(), NULL,
-            (CFNotificationCallback)^(CFNotificationCenterRef c, void *o, CFStringRef n, const void *u, CFDictionaryRef i){
-                wp_loadPrefs();
-            }, WP_NOTE, NULL, CFNotificationSuspensionBehaviorCoalesce);
+            (CFNotificationCallback)wp_notifyCallback,
+            WP_NOTE, NULL, CFNotificationSuspensionBehaviorCoalesce);
 
         [[NSNotificationCenter defaultCenter] addObserverForName:UIKeyboardDidShowNotification object:nil queue:nil usingBlock:^(NSNotification *n){
             CGRect f = [[n.userInfo objectForKey:UIKeyboardFrameEndUserInfoKey] CGRectValue];
