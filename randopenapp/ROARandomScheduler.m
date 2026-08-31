@@ -213,15 +213,22 @@ static void roa_testRequest(CFNotificationCenterRef center, void *observer,
         NSLog(@"[ROA] window%ld already triggered today.", (long)windex);
         return nil;
     }
-    // 目标时刻：若当前在窗口内，从 [max(now+1, ws) .. we] 随机；若当前早于窗口，从整窗随机；已过则不安排
+    // 目标时刻必须严格在未来分钟，绝不能生成过去时刻，否则会在窗口结束后被立即触发
     NSInteger earliest, latest;
     if (nowMin < ws) {
-        earliest = ws; latest = we;                    // 还没开始：整窗随机
-    } else if (nowMin <= we) {
-        earliest = nowMin + 1; latest = we;            // 正在窗口中：从现在起作用
-        if (earliest > latest) earliest = ws;          // 接近末尾兜底
+        // 还没开始：整窗随机
+        earliest = ws; latest = we;
+    } else if (nowMin < we) {
+        // 正在窗口中（且还有未来分钟）：从现在起随机
+        earliest = nowMin + 1; latest = we;
     } else {
+        // nowMin >= we：窗口已过（含末尾边界），本 tick 不安排
         NSLog(@"[ROA] window%ld already passed today.", (long)windex);
+        return nil;
+    }
+    // 兜底：若竟无未来分钟（极端边界），本窗口本 tick 不安排，等待后续 tick 进入窗口时再排
+    if (earliest > latest || earliest < nowMin) {
+        NSLog(@"[ROA] window%ld no future minute, defer.", (long)windex);
         return nil;
     }
     NSInteger pick = earliest + arc4random_uniform((uint32_t)(latest - earliest + 1));
