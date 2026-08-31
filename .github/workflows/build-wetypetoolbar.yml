@@ -1,0 +1,103 @@
+name: build-wetypetoolbar
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - 'wetypetoolbar/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    env:
+      HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Theos dependencies
+        run: |
+          brew install ldid dpkg xz perl || true
+
+      - name: Install Theos
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git clone --depth=1 https://github.com/theos/theos.git $HOME/theos
+          export THEOS=$HOME/theos
+          $THEOS/bin/update-theos
+          mkdir -p $HOME/theos/sdks
+          gh release download -R theos/sdks -p "iPhoneOS14.5.sdk.tar.xz" -D /tmp
+          tar -xJf /tmp/iPhoneOS14.5.sdk.tar.xz -C $HOME/theos/sdks/
+          ln -sf "$HOME/theos/sdks/iPhoneOS14.5.sdk" "$HOME/theos/sdks/iPhoneOS14.0.sdk"
+
+      - name: Build with Theos (FAT arm64 + arm64e)
+        working-directory: wetypetoolbar
+        env:
+          THEOS: /Users/runner/theos
+        run: |
+          rm -rf .theos
+          make
+          echo "=== Build output ==="
+          find .theos -type f 2>/dev/null | head -50
+
+      - name: Package deb manually (rootless layout)
+        working-directory: wetypetoolbar
+        run: |
+          VERSION=$(grep '^Version:' control | awk '{print $2}')
+          echo "VERSION=$VERSION"
+          mkdir -p stage/DEBIAN
+
+          # ---- TweakInject：dylib + Filter plist（roothide 下落到 /var/jb/usr/lib/TweakInject） ----
+          mkdir -p stage/var/jb/usr/lib/TweakInject
+          TWEAK_BIN=""
+          for c in .theos/obj/debug/WetypePlus.dylib .theos/obj/WetypePlus.dylib; do
+            [ -f "$c" ] && TWEAK_BIN="$c" && break
+          done
+          [ -z "$TWEAK_BIN" ] && { echo "FATAL: WetypePlus.dylib not found"; exit 1; }
+          cp "$TWEAK_BIN" stage/var/jb/usr/lib/TweakInject/WetypePlus.dylib
+          cp layout/Library/MobileSubstrate/DynamicLibraries/WetypePlus.plist stage/var/jb/usr/lib/TweakInject/
+
+          # ---- PreferenceBundles：先铺 layout（含手写 Info.plist/Root.plist），再拷 theos 产出的可执行 ----
+          mkdir -p stage/var/jb/Library/PreferenceBundles
+          cp -R layout/Library/PreferenceBundles/WetypePlusPrefs.bundle stage/var/jb/Library/PreferenceBundles/
+          PREFS_BIN=""
+          for c in .theos/obj/debug/WetypePlusPrefs.bundle/WetypePlusPrefs .theos/obj/WetypePlusPrefs.bundle/WetypePlusPrefs; do
+            [ -f "$c" ] && PREFS_BIN="$c" && break
+          done
+          [ -z "$PREFS_BIN" ] && { echo "FATAL: WetypePlusPrefs executable not found"; exit 1; }
+          cp "$PREFS_BIN" stage/var/jb/Library/PreferenceBundles/WetypePlusPrefs.bundle/
+
+          # ---- PreferenceLoader 入口 ----
+          mkdir -p stage/var/jb/Library/PreferenceLoader/Preferences
+          cp layout/Library/PreferenceLoader/Preferences/WetypePlus.plist stage/var/jb/Library/PreferenceLoader/Preferences/
+
+          # ---- 自检：偏好 bundle 关键文件缺一不可 ----
+          test -f stage/var/jb/Library/PreferenceBundles/WetypePlusPrefs.bundle/WetypePlusPrefs || { echo "FATAL: prefs executable missing"; exit 1; }
+          test -f stage/var/jb/Library/PreferenceBundles/WetypePlusPrefs.bundle/Root.plist || { echo "FATAL: Root.plist missing"; exit 1; }
+          plutil -extract NSPrincipalClass raw stage/var/jb/Library/PreferenceBundles/WetypePlusPrefs.bundle/Info.plist
+
+          # ---- 保险：对所有 Mach-O 显式假签名 ----
+          find stage -type f \( -name "*.dylib" -o -name "WetypePlusPrefs" \) -exec ldid -S {} \;
+
+          # ---- DEBIAN ----
+          cp control stage/DEBIAN/control
+          sed -i '' "s/^Version:.*/Version: $VERSION/" stage/DEBIAN/control
+          echo "" >> stage/DEBIAN/control
+          if [ -f DEBIAN/postinst ]; then cp DEBIAN/postinst stage/DEBIAN/postinst; chmod 755 stage/DEBIAN/postinst; fi
+          chmod 755 stage/DEBIAN/control
+
+          echo "=== Stage layout ==="
+          find stage -type f
+
+          mkdir -p packages
+          DEB="packages/com.yzdmm.wetypeplus_${VERSION}_iphoneos-arm64e.deb"
+          dpkg-deb --root-owner-group -b stage "$DEB"
+          echo "=== Deb package ==="
+          ls -la packages/
+
+      - name: Upload deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WetypePlus-deb
+          path: wetypetoolbar/packages/*.deb

@@ -1,0 +1,4 @@
+#!/bin/bash
+# WetypePlus post-install：注销 SpringBoard 生效
+killall -9 SpringBoard 2>/dev/null || true
+exit 0

@@ -1,0 +1,8 @@
+Package: com.yzdmm.wetypeplus
+Name: WetypePlus
+Version: 1.0.0
+Architecture: iphoneos-arm64e
+Maintainer: yzdmm
+Author: yzdmm
+Section: Tweaks
+Description: 键盘上方通用工具栏(光标/粘贴/全选/符号)，对任意键盘(含微信输入法)生效
