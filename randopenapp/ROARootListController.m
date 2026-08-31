@@ -27,12 +27,11 @@ static PSCellType PSCellTypeFromString(NSString *str) {
             @"PSStaticTextCell": @(PSStaticTextCell),
             @"PSEditTextCell": @(PSEditTextCell),
             @"PSSegmentCell": @(PSSegmentCell),
-            @"PSTextCell": @(PSTextCell),
             @"PSButtonCell": @(PSButtonCell),
             @"PSSecureEditTextCell": @(PSSecureEditTextCell),
         };
     });
-    return (PSCellType)[(map[str] ?: @(PSTextCell)) integerValue];
+    return (PSCellType)[(map[str] ?: @(PSStaticTextCell)) integerValue];
 }
 
 @interface ROARootListController : PSListController
@@ -57,7 +56,7 @@ static PSCellType PSCellTypeFromString(NSString *str) {
                         ?: [NSArray arrayWithContentsOfFile:[gBundle pathForResource:@"Root" ofType:@"plist"]];
         // Root.plist 是 preferences plist 格式，取 items 键
         NSArray *specs = loaded ? [self specifiersFromPlist:loaded] : [NSArray array];
-        _specifiers = [specs retain];
+        _specifiers = specs;
     }
     return _specifiers;
 }
