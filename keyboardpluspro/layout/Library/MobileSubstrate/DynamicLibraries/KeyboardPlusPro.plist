@@ -4,15 +4,39 @@
 <dict>
 	<key>Filter</key>
 	<dict>
-		<key>Mode</key>
-		<string>AnyApplication</string>
 		<key>Bundles</key>
 		<array>
-			<!-- AnyApplication 已覆盖所有 App（含微信等三方 App）；
-			     额外保留 springboard，确保主屏幕/Spotlight 调出的键盘也注入。
-			     注意：绝不注入 com.apple.Preferences —— 设置进程跑 UIKeyboard* hook 会触发
-			     点击设置入口的 watchdog 重启；该保护改由 Tweak.xm 的 %group KBP + %ctor 守卫实现。 -->
+			<!-- 系统 App（1.0.11 稳定列表：不用 AnyApplication，避免注入过宽导致崩溃/注销） -->
 			<string>com.apple.springboard</string>
+			<string>com.apple.MobileSMS</string>
+			<string>com.apple.mobilemail</string>
+			<string>com.apple.mobilenotes</string>
+			<string>com.apple.mobilesafari</string>
+			<string>com.apple.mobilecal</string>
+			<string>com.apple.mobilephone</string>
+			<string>com.apple.mobiletimer</string>
+			<string>com.apple.reminders</string>
+			<string>com.apple.mobileslideshow</string>
+			<string>com.apple.AppStore</string>
+			<string>com.apple.MobileAddressBook</string>
+			<string>com.apple.mobileme</string>
+			<string>com.apple.weather</string>
+			<string>com.apple.mobilenano</string>
+			<string>com.apple.mobilegarageband</string>
+			<string>com.apple.mobileipod</string>
+			<!-- 第三方常用 App（按需追加；千万别用 AnyApplication，会注入过宽崩溃） -->
+			<string>com.tencent.xin</string>            <!-- 微信 ★ -->
+			<string>com.tencent.mqq</string>           <!-- QQ -->
+			<string>com.alipay.iphoneclient</string>   <!-- 支付宝 -->
+			<string>com.taobao.taobao4iphone</string>  <!-- 淘宝 -->
+			<string>com.jingdong.app.mall</string>     <!-- 京东 -->
+			<string>com.laiwang.DingTalk</string>      <!-- 钉钉 -->
+			<string>com.xingin.xhs</string>            <!-- 小红书 -->
+			<string>tv.danmaku.bili</string>           <!-- B站 -->
+			<string>com.ss.iphone.ugc.Aweme</string>   <!-- 抖音 -->
+			<string>com.sina.weibo</string>            <!-- 微博 -->
+			<string>com.baidu.BaiduMobile</string>     <!-- 百度 -->
+			<string>com.netease.cloudmusic</string>    <!-- 网易云音乐 -->
 		</array>
 	</dict>
 </dict>
