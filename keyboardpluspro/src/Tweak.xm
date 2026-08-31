@@ -1368,6 +1368,8 @@ static KBPreferences *g_KBPrefs = nil;
 // Logos 主钩子 - UIKeyboardImpl
 // ============================================================================
 
+%group KBP
+
 %hook UIKeyboardImpl
 
 // 键盘按键按下时
@@ -1594,6 +1596,8 @@ static KBPreferences *g_KBPrefs = nil;
 
 %end
 
+%end // %group KBP
+
 // ============================================================================
 // Darwin 通知回调 (跨进程通信，设置面板 → Tweak)
 // ============================================================================
@@ -1635,6 +1639,16 @@ static void KBDarwinNotificationCallback(CFNotificationCenterRef center, void *o
         [KBCapsLockManager shared];
         [KBActionButtonManager shared];
         [KBInputEnhancer shared];
+        
+        // ★ 设置进程(com.apple.Preferences)不初始化键盘 hook：避免点击设置入口触发 watchdog 重启
+        //   注入范围已放开为所有 App(含微信等三方 App)，但设置进程绝不能跑 UIKeyboard* hook。
+        NSString *kbpHostBid = [KBUtils applicationBundleID];
+        if (![kbpHostBid isEqualToString:@"com.apple.Preferences"]) {
+            %init(KBP);
+            NSLog(@"[KeyboardPlusPro] 键盘 hook 已初始化 (App: %@)", kbpHostBid);
+        } else {
+            NSLog(@"[KeyboardPlusPro] 在设置进程内，跳过键盘 hook 初始化（防 watchdog 重启）");
+        }
         
         // 注册偏好设置变更通知 (来自设置面板)
         [[NSNotificationCenter defaultCenter] addObserverForName:@"com.yzdmm.keyboardplusprefs.changed"

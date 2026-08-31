@@ -4,37 +4,16 @@
 <dict>
 	<key>Filter</key>
 	<dict>
+		<key>Mode</key>
+		<string>AnyApplication</string>
 		<key>Bundles</key>
-			<array>
-				<!-- 系统键盘注入：覆盖 SpringBoard + 系统 App + 三方 App -->
-				<string>com.apple.springboard</string>
-				<!-- 不要注入 com.apple.Preferences：键盘 tweak 无需进设置进程；注入会让 UIKeyboard* hook
-				     在设置进程加载，干扰设置面板/偏好 bundle 加载，实测触发点击设置入口的 watchdog 重启。
-				     设置面板由 PreferenceLoader 独立加载 bundle，与此 Filter 无关。 -->
-				<string>com.apple.MobileSMS</string>
-				<string>com.apple.mobilemail</string>
-				<string>com.apple.mobilenotes</string>
-				<string>com.apple.mobilesafari</string>
-				<string>com.apple.mobilecal</string>
-				<string>com.apple.mobilephone</string>
-				<string>com.apple.mobiletimer</string>
-				<string>com.apple.reminders</string>
-				<string>com.apple.mobileslideshow</string>
-				<string>com.apple.AppStore</string>
-				<string>com.apple.MobileAddressBook</string>
-				<string>com.apple.mobileme</string>
-				<string>com.apple.weather</string>
-				<string>com.apple.mobilenano</string>
-				<string>com.apple.mobilemail</string>
-				<string>com.apple.mobilegarageband</string>
-				<string>com.apple.mobileipod</string>
-				<string>com.apple.mobilesafari</string>
-			</array>
-		<!-- 非越狱巨魔/TrollStore 场景：用 Executables 注入 UIKit 框架 -->
-		<!-- <key>Executables</key>
 		<array>
-			<string>UIKit</string>
-		</array> -->
+			<!-- AnyApplication 已覆盖所有 App（含微信等三方 App）；
+			     额外保留 springboard，确保主屏幕/Spotlight 调出的键盘也注入。
+			     注意：绝不注入 com.apple.Preferences —— 设置进程跑 UIKeyboard* hook 会触发
+			     点击设置入口的 watchdog 重启；该保护改由 Tweak.xm 的 %group KBP + %ctor 守卫实现。 -->
+			<string>com.apple.springboard</string>
+		</array>
 	</dict>
 </dict>
 </plist>
