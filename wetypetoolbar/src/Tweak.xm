@@ -9,12 +9,12 @@
 // 对任意使用微信输入法的 App 都生效。
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
-#import <objc/runtime.h>
 
 #define WP_DOMAIN @"com.yzdmm.wetypeplus"
 #define WP_NOTE   CFSTR("com.yzdmm.wetypeplus.changed")
-// 工具栏高度：34pt。做法：把整个键盘 view 长高 WP_BAR_H，腾出最底部一道空条给工具栏，
-// 微信键盘自身的 123/空格/中英/搜索 行留在原高度，不与工具栏重叠。
+// 工具栏高度：34pt。做法：把微信键盘的所有 subview 整体上移 WP_BAR_H（用 transform），
+// 腾出最底部空条给工具栏；功能行(123/空格/中英/搜索)上移后与工具栏刚好相接、不重叠。
+// 代价：键盘最顶部(语音/图标行)会顶出键盘上沿(被系统裁掉或压在输入框上)。
 #define WP_BAR_H 34
 
 static BOOL wp_enabled = YES;
@@ -141,9 +141,6 @@ static void wp_hapticBump() {
 
 %hook UIInputViewController
 
-static const void *kWpBaseH = &kWpBaseH;
-static const void *kWpGrown = &kWpGrown;
-
 - (void)viewDidLoad {
     %orig;
     if (!wp_enabled) return;
@@ -154,22 +151,16 @@ static const void *kWpGrown = &kWpGrown;
     %orig;
     if (!wp_enabled) return;
     WPToolbar *t = [WPToolbar shared];
-    if (t.superview != self.view) return;
+    if (t.superview != self.view) [self.view addSubview:t];
 
-    // 把整个键盘 view 长高 WP_BAR_H，腾出最底部一道空条给工具栏，
-    // 微信键盘自身的 123/空格/中英/搜索 行仍留在原生高度，不与工具栏重叠。
-    // 记录长高前的原生高度，只在还没长高时改一次 frame（避免 layout 循环）。
-    CGFloat baseH = [objc_getAssociatedObject(self, kWpBaseH) doubleValue];
-    if (baseH <= 0) {
-        baseH = self.view.bounds.size.height;
-        objc_setAssociatedObject(self, kWpBaseH, @(baseH), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    BOOL grown = [objc_getAssociatedObject(self, kWpGrown) boolValue];
-    if (!grown && self.view.bounds.size.height < baseH + WP_BAR_H - 0.5) {
-        CGRect f = self.view.frame;
-        f.size.height = baseH + WP_BAR_H;
-        self.view.frame = f;
-        objc_setAssociatedObject(self, kWpGrown, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // 把微信键盘自己的所有 subview 整体上移 WP_BAR_H（用 transform，不动 frame，
+    // 不和 auto-layout 打架；hit-test 也跟着走）。
+    // 这样微信键盘整体上移 WP_BAR_H，腾出最底部空条给工具栏；
+    // 工具栏贴屏幕底边，与上移后的功能行(123/空格/中英/搜索)刚好相接、不重叠。
+    // 代价：键盘最顶部(语音/图标行)会顶出键盘上沿(被系统裁掉或压在输入框上)。
+    for (UIView *sv in [self.view.subviews copy]) {
+        if (sv == t) continue;
+        sv.transform = CGAffineTransformMakeTranslation(0, -WP_BAR_H);
     }
     [t relayout];
 }
