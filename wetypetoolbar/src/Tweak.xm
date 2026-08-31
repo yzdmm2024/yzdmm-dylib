@@ -1,15 +1,15 @@
-// WetypePlus 3.0.3 — 诊断增强版。
+// WetypePlus 3.0.4 — 日志路径彻底兜底 + NSLog 兜底。
 //
-// 相对 3.0.2 的变化：
-//   1) 日志统一写到一个文件 wp_geo.log，且 %ctor 启动时「立即写一行」。
-//      判读规则（非常重要）：
-//        - wp_geo.log 存在且有 [ctor] 行      => 注入成功，tweak 已加载；
-//        - wp_geo.log 完全不存在              => dylib 根本没加载（filter 不匹配 / per-app 没开 /
-//                                               deb 没真正安装 / 键盘进程没重启）。
-//   2) 日志路径多候选兜底：/var/mobile/wp_geo.log -> /var/mobile/Library/Caches/wp_geo.log
-//      -> /tmp/wp_geo.log。首行会打印「最终生效路径」，规避某些进程对 /var/mobile 无写权限。
-//   3) viewDidLayoutSubviews 每次调用都写入口日志（vc 类名 / view 类名 / 子视图数 / enabled），
-//      首次调用额外 dump 前 3 层视图树，直接从 tweak 视角确认 WBTopBar 是否可达。
+// 相对 3.0.3 的变化：
+//   诊断发现：设备实际跑的是早期旧版 dylib（没有 3.0.x 标记），所以 wp_geo.log 从不存在。
+//   另外键盘扩展进程对 /var/mobile、/tmp 很可能没有写权限（容器进程实测写不进）。
+//   因此本版把日志路径优先级改为：
+//     1) NSTemporaryDirectory()/wp_geo.log   —— 每个进程保证可写的临时目录，优先级最高；
+//     2) /var/mobile/wp_geo.log
+//     3) /var/mobile/Library/Caches/wp_geo.log
+//     4) /tmp/wp_geo.log
+//   并且每一行日志额外走一次 NSLog(@"[WetypePlus] ...")，syslog 永远可写，
+//   即使文件全部失败，也能在控制台/syslog 看到注入与定位结果。
 //
 // 工具栏定位逻辑（递归按类名 WBTopBar 命中图标行、占据其原位、隐藏其按钮）保持不变。
 #import <UIKit/UIKit.h>
@@ -28,13 +28,17 @@ static NSString *g_wpLogPath = nil;
 
 static NSString *wp_resolveLogPath() {
     if (g_wpLogPath) return g_wpLogPath;
-    NSArray *cands = @[
-        @"/var/mobile/wp_geo.log",
-        @"/var/mobile/Library/Caches/wp_geo.log",
-        @"/tmp/wp_geo.log"
-    ];
+    NSMutableArray *cands = [NSMutableArray array];
+    // 1) 进程私有临时目录：几乎一定可写，优先级最高
+    NSString *tmpDir = NSTemporaryDirectory();
+    if (tmpDir.length) [cands addObject:[tmpDir stringByAppendingPathComponent:@"wp_geo.log"]];
+    // 2) /var/mobile 系
+    [cands addObject:@"/var/mobile/wp_geo.log"];
+    [cands addObject:@"/var/mobile/Library/Caches/wp_geo.log"];
+    // 3) 全局 /tmp
+    [cands addObject:@"/tmp/wp_geo.log"];
     for (NSString *f in cands) {
-        // 先 probe 这一行，能写说明路径可用，随即清空，避免污染日志
+        // 先 probe 一行，能写说明路径可用，随即清空，避免污染日志
         if ([@"probe\n" writeToFile:f atomically:YES encoding:NSUTF8StringEncoding error:nil]) {
             [[NSData data] writeToFile:f atomically:YES]; // 清空成空文件
             g_wpLogPath = f;
@@ -46,6 +50,8 @@ static NSString *wp_resolveLogPath() {
 }
 
 static void wp_log(NSString *line) {
+    // 兜底：syslog 永远可写，即使文件全部失败也能在控制台看到
+    NSLog(@"[WetypePlus] %@", line);
     NSString *file = wp_resolveLogPath();
     NSString *stamp = [NSString stringWithFormat:@"[%@] %@\n", [NSDate date], line];
     NSString *cur = [NSString stringWithContentsOfFile:file encoding:NSUTF8StringEncoding error:nil] ?: @"";
@@ -341,9 +347,10 @@ static const void *kWpSetupDone = &kWpSetupDone;
         wp_loadPrefs();
         wp_resolveLogPath(); // 确定可写路径（会清掉 probe 行）
         wp_log([NSString stringWithFormat:
-                @"[ctor] WetypePlus 3.0.3 loaded | process=%@ bundle=%@ logPath=%@",
+                @"[ctor] WetypePlus 3.0.4 loaded | process=%@ bundle=%@ NSTemporaryDirectory=%@ logPath=%@",
                 ([[NSProcessInfo processInfo] processName] ?: @"?"),
                 ([[NSBundle mainBundle] bundleIdentifier] ?: @"?"),
+                NSTemporaryDirectory() ?: @"?",
                 wp_resolveLogPath()]);
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDarwinNotifyCenter(), NULL,
