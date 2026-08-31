@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>title</key>
+    <string>KeyboardPlusPro</string>
+    <key>items</key>
+    <array>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>功能开关</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>defaults</key>
+            <string>com.yzdmm.keyboardpluspro</string>
+            <key>key</key>
+            <string>cursorEnabled</string>
+            <key>label</key>
+            <string>增强光标</string>
+            <key>default</key>
+            <true/>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>defaults</key>
+            <string>com.yzdmm.keyboardpluspro</string>
+            <key>key</key>
+            <string>clipboardEnabled</string>
+            <key>label</key>
+            <string>剪贴板历史</string>
+            <key>default</key>
+            <true/>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSSwitchCell</string>
+            <key>defaults</key>
+            <string>com.yzdmm.keyboardpluspro</string>
+            <key>key</key>
+            <string>hapticEnabled</string>
+            <key>label</key>
+            <string>触觉反馈</string>
+            <key>default</key>
+            <true/>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>操作</string>
+        </dict>
+        <dict>
+            <key>cell</key>
+            <string>PSButtonCell</string>
+            <key>label</key>
+            <string>注销 (Respring)</string>
+            <key>action</key>
+            <string>respring</string>
+        </dict>
+    </array>
+</dict>
+</plist>
