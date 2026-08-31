@@ -160,7 +160,8 @@ static void wp_log(NSString *file, NSString *line) {
         }
         // 3) 再退化：递归找顶部、高度 28~55、宽>200、子视图>=3 的第一条
         if (!iconBar) {
-            iconBar = [self findIconHeuristicIn:root depth:0 bestY:&(CGFloat){1e9}];
+            CGFloat bestY = 1e9;
+            iconBar = [self findIconHeuristicIn:root depth:0 bestY:&bestY];
             how = @"heuristic";
         }
         if (iconBar) {
