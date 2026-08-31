@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Filter</key>
+	<dict>
+		<key>Bundles</key>
+			<array>
+				<!-- 系统键盘注入：覆盖 SpringBoard + 系统 App + 三方 App -->
+				<string>com.apple.springboard</string>
+				<string>com.apple.Preferences</string>
+				<string>com.apple.MobileSMS</string>
+				<string>com.apple.mobilemail</string>
+				<string>com.apple.mobilenotes</string>
+				<string>com.apple.mobilesafari</string>
+				<string>com.apple.mobilecal</string>
+				<string>com.apple.mobilephone</string>
+				<string>com.apple.mobiletimer</string>
+				<string>com.apple.reminders</string>
+				<string>com.apple.mobileslideshow</string>
+				<string>com.apple.AppStore</string>
+				<string>com.apple.MobileAddressBook</string>
+				<string>com.apple.mobileme</string>
+				<string>com.apple.weather</string>
+				<string>com.apple.mobilenano</string>
+				<string>com.apple.mobilemail</string>
+				<string>com.apple.mobilegarageband</string>
+				<string>com.apple.mobileipod</string>
+				<string>com.apple.mobilesafari</string>
+			</array>
+		<!-- 非越狱巨魔/TrollStore 场景：用 Executables 注入 UIKit 框架 -->
+		<!-- <key>Executables</key>
+		<array>
+			<string>UIKit</string>
+		</array> -->
+	</dict>
+</dict>
+</plist>
