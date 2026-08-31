@@ -193,16 +193,25 @@ static void wp_hapticBump() {
 
 @end
 
-// ---------------- hook 系统键盘视图：向上撑高，工具栏钉顶 ----------------
-%hook UIInputView
+// ---------------- hook 键盘窗口 + UIInputView：向上撑高，工具栏钉顶 ----------------
+// 关键：只「撑高承载键盘的窗口」(Hosted/Keyboard Window)，UIInputView 自身 frame 不动
+// （否则 UIInputView 顶部会超出窗口被裁掉）。窗口撑高后，UIInputView 自然填满更高的窗口，
+// 再把候选栏/按键等直接子视图整体下移 WP_GROW，顶部腾出一行给工具栏，互不遮挡。
+%hook UIWindow
 
 - (void)setFrame:(CGRect)f {
-    // 本 dylib 只注入微信输入法键盘进程(wxkb_plugin)，这里的 UIInputView 即微信键盘。
-    // 向上撑高 WP_GROW（高度+WP_GROW，y-WP_GROW），底部不变、顶部上移腾出一行。
-    f.size.height += WP_GROW;
-    f.origin.y    -= WP_GROW;
+    NSString *cn = NSStringFromClass(self.class);
+    if ([cn rangeOfString:@"Hosted"].location != NSNotFound ||
+        [cn rangeOfString:@"Keyboard"].location != NSNotFound) {
+        f.size.height += WP_GROW;
+        f.origin.y    -= WP_GROW;
+    }
     %orig(f);
 }
+
+%end
+
+%hook UIInputView
 
 - (void)layoutSubviews {
     %orig;
@@ -245,8 +254,9 @@ static void wp_hapticBump() {
         NSMutableString *tree = [NSMutableString string];
         wp_dumpTree(self, 0, tree);
         wp_log([NSString stringWithFormat:
-                @"[kb] FIRST UIInputView bounds={%.1f,%.1f,%.1f,%.1f} subviews=%lu\n%@",
+                @"[kb] FIRST UIInputView bounds={%.1f,%.1f,%.1f,%.1f} window=%@ subviews=%lu\n%@",
                 vf.origin.x, vf.origin.y, vf.size.width, vf.size.height,
+                self.window ? NSStringFromClass(self.window.class) : @"nil",
                 (unsigned long)self.subviews.count, tree]);
         wp_log([NSString stringWithFormat:
                 @"[kb] APPLIED toolbar at top band (0,0,%.1f,%.1f); candidate row shifted down by %d",
