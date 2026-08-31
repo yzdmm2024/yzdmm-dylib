@@ -135,7 +135,9 @@ static void wp_notifyCallback(CFNotificationCenterRef center, void *observer,
     if (!tew) return;
     if (self.superview != tew) [tew addSubview:self];
     CGFloat h = 44;
-    self.frame = CGRectMake(0, kbFrame.origin.y - h, kbFrame.size.width, h);
+    // 关键修复：顶边与键盘对齐(叠在键盘“最顶端”)，而不是 keyboard 顶边再往上 44px。
+    // 之前往上挪 44px 正好压在键盘上方的输入框上，导致挡住输入框。
+    self.frame = CGRectMake(kbFrame.origin.x, kbFrame.origin.y, kbFrame.size.width, h);
     self.hidden = NO;
 }
 
