@@ -9,10 +9,12 @@
 // 对任意使用微信输入法的 App 都生效。
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
+#import <objc/runtime.h>
 
 #define WP_DOMAIN @"com.yzdmm.wetypeplus"
 #define WP_NOTE   CFSTR("com.yzdmm.wetypeplus.changed")
-// 工具栏高度：34pt，落在键盘最底部（home 指示条上方的留白里），尽量不压到空格键那一行。
+// 工具栏高度：34pt。做法：把整个键盘 view 长高 WP_BAR_H，腾出最底部一道空条给工具栏，
+// 微信键盘自身的 123/空格/中英/搜索 行留在原高度，不与工具栏重叠。
 #define WP_BAR_H 34
 
 static BOOL wp_enabled = YES;
@@ -139,6 +141,9 @@ static void wp_hapticBump() {
 
 %hook UIInputViewController
 
+static const void *kWpBaseH = &kWpBaseH;
+static const void *kWpGrown = &kWpGrown;
+
 - (void)viewDidLoad {
     %orig;
     if (!wp_enabled) return;
@@ -149,7 +154,24 @@ static void wp_hapticBump() {
     %orig;
     if (!wp_enabled) return;
     WPToolbar *t = [WPToolbar shared];
-    if (t.superview == self.view) [t relayout];
+    if (t.superview != self.view) return;
+
+    // 把整个键盘 view 长高 WP_BAR_H，腾出最底部一道空条给工具栏，
+    // 微信键盘自身的 123/空格/中英/搜索 行仍留在原生高度，不与工具栏重叠。
+    // 记录长高前的原生高度，只在还没长高时改一次 frame（避免 layout 循环）。
+    CGFloat baseH = [objc_getAssociatedObject(self, kWpBaseH) doubleValue];
+    if (baseH <= 0) {
+        baseH = self.view.bounds.size.height;
+        objc_setAssociatedObject(self, kWpBaseH, @(baseH), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    BOOL grown = [objc_getAssociatedObject(self, kWpGrown) boolValue];
+    if (!grown && self.view.bounds.size.height < baseH + WP_BAR_H - 0.5) {
+        CGRect f = self.view.frame;
+        f.size.height = baseH + WP_BAR_H;
+        self.view.frame = f;
+        objc_setAssociatedObject(self, kWpGrown, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [t relayout];
 }
 
 %end
