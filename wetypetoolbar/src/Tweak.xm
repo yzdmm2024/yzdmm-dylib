@@ -29,14 +29,15 @@ static NSString *g_wpLogPath = nil;
 static NSString *wp_resolveLogPath() {
     if (g_wpLogPath) return g_wpLogPath;
     NSMutableArray *cands = [NSMutableArray array];
-    // 1) 进程私有临时目录：几乎一定可写，优先级最高
+    // 1) /var/mobile/wp_wp.log —— 设备用户主目录：Filza 可直接打开，
+    //    且容器进程 frida 可读（用于远程诊断）；扩展/容器共享此路径。优先级最高。
+    [cands addObject:@"/var/mobile/wp_wp.log"];
+    // 2) 进程私有临时目录（扩展沙盒内，frida 可直读）
     NSString *tmpDir = NSTemporaryDirectory();
-    if (tmpDir.length) [cands addObject:[tmpDir stringByAppendingPathComponent:@"wp_geo.log"]];
-    // 2) /var/mobile 系
-    [cands addObject:@"/var/mobile/wp_geo.log"];
-    [cands addObject:@"/var/mobile/Library/Caches/wp_geo.log"];
-    // 3) 全局 /tmp
-    [cands addObject:@"/tmp/wp_geo.log"];
+    if (tmpDir.length) [cands addObject:[tmpDir stringByAppendingPathComponent:@"wp_wp.log"]];
+    // 3) 兜底
+    [cands addObject:@"/var/mobile/Library/Caches/wp_wp.log"];
+    [cands addObject:@"/tmp/wp_wp.log"];
     for (NSString *f in cands) {
         // 先 probe 一行，能写说明路径可用，随即清空，避免污染日志
         if ([@"probe\n" writeToFile:f atomically:YES encoding:NSUTF8StringEncoding error:nil]) {
@@ -150,6 +151,14 @@ static void wp_hapticBump() {
 - (void)attachTo:(UIInputViewController *)vc {
     _vc = vc;
     [self buildIfNeeded];
+    // 立即挂到键盘视图顶层并可见——只要本 tweak 在扩展里加载，就一定能看到一条 38pt 工具栏，
+    // 作为「扩展是否注入成功」的肉眼判定；后续 relayout 会把它精确挪到图标行原位。
+    UIView *root = vc.view;
+    if (root) {
+        if (self.superview != root) [root addSubview:self];
+        [root bringSubviewToFront:self];
+        self.frame = CGRectMake(0, 0, root.bounds.size.width, WP_BAR_H_DEFAULT);
+    }
     self.hidden = NO;
 }
 
@@ -188,6 +197,7 @@ static void wp_hapticBump() {
     if (!vc) { self.hidden = YES; wp_log(@"[relayout] bail: _vc nil"); return; }
     UIView *root = vc.view;
     if (!root) { self.hidden = YES; wp_log(@"[relayout] bail: vc.view nil"); return; }
+    self.hidden = NO; // 只要走到这里就保证可见
 
     UIView *iconBar = objc_getAssociatedObject(root, "wp.iconBar");
     NSString *how = objc_getAssociatedObject(root, "wp.iconBarHow");
@@ -221,13 +231,16 @@ static void wp_hapticBump() {
     }
 
     if (!iconBar) {
-        // 实在找不到：退回顶部固定 38pt（至少可见，不保证不重叠）
+        // 找不到图标行：留在顶部固定 38pt（必定可见），并染成橙色作为「调试态」标记，
+        // 让用户一眼知道 tweak 已注入、只是没匹配到图标行。
         if (self.superview != root) [root addSubview:self];
         [root bringSubviewToFront:self];
+        self.backgroundColor = [UIColor colorWithRed:0.95 green:0.55 blue:0.12 alpha:0.98];
         if (!CGRectEqualToRect(self.frame, CGRectMake(0, 0, root.bounds.size.width, WP_BAR_H_DEFAULT))) {
             self.frame = CGRectMake(0, 0, root.bounds.size.width, WP_BAR_H_DEFAULT);
             _built = NO; for (UIView *s in [self.subviews copy]) [s removeFromSuperview]; [self buildIfNeeded];
         }
+        wp_log(@"[relayout] NOT FOUND iconBar -> 顶部调试态(橙色) visible");
         return;
     }
 
@@ -235,6 +248,7 @@ static void wp_hapticBump() {
     UIView *host = iconBar.superview ?: root;
     if (self.superview != host) [host addSubview:self];
     [host bringSubviewToFront:self];
+    self.backgroundColor = [UIColor colorWithWhite:0.12 alpha:0.98]; // 正常深色
 
     CGRect f = iconBar.frame;
     CGRect barRect = CGRectMake(f.origin.x, f.origin.y, f.size.width, f.size.height);
@@ -347,7 +361,7 @@ static const void *kWpSetupDone = &kWpSetupDone;
         wp_loadPrefs();
         wp_resolveLogPath(); // 确定可写路径（会清掉 probe 行）
         wp_log([NSString stringWithFormat:
-                @"[ctor] WetypePlus 3.0.4 loaded | process=%@ bundle=%@ NSTemporaryDirectory=%@ logPath=%@",
+                @"[ctor] WetypePlus 3.0.5 loaded | process=%@ bundle=%@ NSTemporaryDirectory=%@ logPath=%@",
                 ([[NSProcessInfo processInfo] processName] ?: @"?"),
                 ([[NSBundle mainBundle] bundleIdentifier] ?: @"?"),
                 NSTemporaryDirectory() ?: @"?",
