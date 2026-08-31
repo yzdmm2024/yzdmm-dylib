@@ -1,8 +1,0 @@
-Package: com.yzdmm.wetypeplus
-Name: WetypePlus
-Version: 3.0.7
-Architecture: iphoneos-arm64e
-Maintainer: yzdmm
-Author: yzdmm
-Section: Tweaks
-Description: 微信输入法键盘内工具栏(光标/粘贴/符号)；递归按类名WBTopBar定位图标行、占据其原位并隐藏其按钮，不压按键；附几何日志wp_geo.log
