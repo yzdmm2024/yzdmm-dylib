@@ -1,0 +1,8 @@
+Package: com.yzdmm.kkgameautologin
+Name: KKGameAutoLogin
+Version: 1.0.10
+Architecture: iphoneos-arm64e
+Maintainer: yzdmm
+Author: yzdmm
+Section: Tweaks
+Description: 用于验证（免登录）

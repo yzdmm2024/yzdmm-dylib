@@ -1,0 +1,4 @@
+#!/bin/sh
+# KKGameAutoLogin post-install: 装完注销 SpringBoard 让注入生效
+killall -9 SpringBoard 2>/dev/null || true
+exit 0
