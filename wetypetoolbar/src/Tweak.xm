@@ -1,69 +1,69 @@
-// WetypePlus 3.0.4 — 日志路径彻底兜底 + NSLog 兜底。
+// WetypePlus 3.0.6 — 根治「挡住候选栏」。
 //
-// 相对 3.0.3 的变化：
-//   诊断发现：设备实际跑的是早期旧版 dylib（没有 3.0.x 标记），所以 wp_geo.log 从不存在。
-//   另外键盘扩展进程对 /var/mobile、/tmp 很可能没有写权限（容器进程实测写不进）。
-//   因此本版把日志路径优先级改为：
-//     1) NSTemporaryDirectory()/wp_geo.log   —— 每个进程保证可写的临时目录，优先级最高；
-//     2) /var/mobile/wp_geo.log
-//     3) /var/mobile/Library/Caches/wp_geo.log
-//     4) /tmp/wp_geo.log
-//   并且每一行日志额外走一次 NSLog(@"[WetypePlus] ...")，syslog 永远可写，
-//   即使文件全部失败，也能在控制台/syslog 看到注入与定位结果。
+// 之前 3.0.0~3.0.5 的做法是「把工具栏叠在 WBTopBar（候选栏）原位并隐藏它的子视图」，
+// 结果就是候选栏（你打的字）被盖住/被隐藏。frida 实锤 WBTopBar 就是顶部候选栏容器。
 //
-// 工具栏定位逻辑（递归按类名 WBTopBar 命中图标行、占据其原位、隐藏其按钮）保持不变。
+// 3.0.6 改成本质不同的方案：不碰候选栏，而是把【整个键盘向上撑高 WP_GROW(36pt)】，
+// 工具栏作为全新的一行钉在键盘最顶，候选栏 + 按键整体下移 WP_GROW，三者互不重叠。
+//
+// 具体实现：hook 系统键盘视图 UIInputView：
+//   - setFrame: 每次系统设置键盘高度时，把高度 +WP_GROW、原点 y -WP_GROW（向上撑高）。
+//   - layoutSubviews: 系统布局完后，把所有「直接子视图」（候选栏/按键区）向下平移 WP_GROW，
+//     再把工具栏钉到顶部 (0,0,W,WP_GROW)。平移只作用于仍停留在顶部区(y<WP_GROW)的子视图，
+//     因此是幂等、可自愈的（系统每次重布局后都会重新平移）。
+//
+// 诊断日志优先写到 App Group（扩展与容器共享，便于远程读取），兜底 /var/mobile、tmp。
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 
 #define WP_DOMAIN @"com.yzdmm.wetypeplus"
 #define WP_NOTE   CFSTR("com.yzdmm.wetypeplus.changed")
-#define WP_BAR_H_DEFAULT 38
+#define WP_GROW   36   // 工具栏行高，键盘整体向上撑高的值
 
 static BOOL wp_enabled = YES;
 static BOOL wp_haptic  = YES;
 
-// ---------------- 日志（多路径兜底） ----------------
+// ---------------- 日志 ----------------
 static NSString *g_wpLogPath = nil;
 
 static NSString *wp_resolveLogPath() {
     if (g_wpLogPath) return g_wpLogPath;
     NSMutableArray *cands = [NSMutableArray array];
-    // 1) /var/mobile/wp_wp.log —— 设备用户主目录：Filza 可直接打开，
-    //    且容器进程 frida 可读（用于远程诊断）；扩展/容器共享此路径。优先级最高。
+    // 1) App Group（扩展与容器共享，frida 探得 group.com.tencent.wetype）：
+    //    扩展能写、容器 frida 能读，便于远程诊断。
+    id fm = [NSFileManager defaultManager];
+    if (fm) {
+        id url = [fm containerURLForSecurityApplicationGroupIdentifier:@"group.com.tencent.wetype"];
+        if (url) [cands addObject:[[url path] stringByAppendingPathComponent:@"wp_wp.log"]];
+    }
+    // 2) /var/mobile
     [cands addObject:@"/var/mobile/wp_wp.log"];
-    // 2) 进程私有临时目录（扩展沙盒内，frida 可直读）
-    NSString *tmpDir = NSTemporaryDirectory();
-    if (tmpDir.length) [cands addObject:[tmpDir stringByAppendingPathComponent:@"wp_wp.log"]];
-    // 3) 兜底
-    [cands addObject:@"/var/mobile/Library/Caches/wp_wp.log"];
+    // 3) 进程私有临时目录
+    NSString *tmp = NSTemporaryDirectory();
+    if (tmp.length) [cands addObject:[tmp stringByAppendingPathComponent:@"wp_wp.log"]];
+    // 4) /tmp
     [cands addObject:@"/tmp/wp_wp.log"];
     for (NSString *f in cands) {
-        // 先 probe 一行，能写说明路径可用，随即清空，避免污染日志
         if ([@"probe\n" writeToFile:f atomically:YES encoding:NSUTF8StringEncoding error:nil]) {
-            [[NSData data] writeToFile:f atomically:YES]; // 清空成空文件
+            [[NSData data] writeToFile:f atomically:YES]; // 清空
             g_wpLogPath = f;
             return f;
         }
     }
-    g_wpLogPath = cands.firstObject; // 全都不行也硬写一个，至少看报错
+    g_wpLogPath = cands.firstObject;
     return g_wpLogPath;
 }
 
 static void wp_log(NSString *line) {
-    // 兜底：syslog 永远可写，即使文件全部失败也能在控制台看到
-    NSLog(@"[WetypePlus] %@", line);
+    NSLog(@"[WetypePlus] %@", line); // syslog 兜底
     NSString *file = wp_resolveLogPath();
     NSString *stamp = [NSString stringWithFormat:@"[%@] %@\n", [NSDate date], line];
     NSString *cur = [NSString stringWithContentsOfFile:file encoding:NSUTF8StringEncoding error:nil] ?: @"";
-    if (cur.length > 20000) cur = [cur substringFromIndex:cur.length - 10000]; // 防无限增长
-    [[cur stringByAppendingString:stamp] writeToFile:file
-                                          atomically:YES
-                                            encoding:NSUTF8StringEncoding
-                                               error:nil];
+    if (cur.length > 20000) cur = [cur substringFromIndex:cur.length - 10000];
+    [[cur stringByAppendingString:stamp] writeToFile:file atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 
-// 递归 dump 视图树（限前 3 层），直接从 tweak 视角看键盘层级
 static void wp_dumpTree(UIView *v, int depth, NSMutableString *out) {
     if (!v || depth > 3) return;
     for (int i = 0; i < depth; i++) [out appendString:@"  "];
@@ -96,14 +96,11 @@ static void wp_hapticBump() {
 
 @interface WPToolbar : UIView
 + (WPToolbar *)shared;
-- (void)attachTo:(UIInputViewController *)vc;
-- (void)relayoutReplacingIconBar;
+- (void)buildIfNeeded;
 @end
 
 @implementation WPToolbar {
-    __weak UIInputViewController *_vc;
     BOOL _built;
-    BOOL _geoLogged;
 }
 
 + (WPToolbar *)shared {
@@ -114,13 +111,12 @@ static void wp_hapticBump() {
 }
 
 - (id)initWithFrame:(CGRect)f {
-    self = [super initWithFrame:CGRectMake(0, 0, [UIScreen mainScreen].bounds.size.width, WP_BAR_H_DEFAULT)];
+    self = [super initWithFrame:CGRectMake(0, 0, [UIScreen mainScreen].bounds.size.width, WP_GROW)];
     if (self) {
         self.backgroundColor = [UIColor colorWithWhite:0.12 alpha:0.98];
         self.hidden = YES;
         self.userInteractionEnabled = YES;
         _built = NO;
-        _geoLogged = NO;
     }
     return self;
 }
@@ -148,153 +144,34 @@ static void wp_hapticBump() {
     }
 }
 
-- (void)attachTo:(UIInputViewController *)vc {
-    _vc = vc;
-    [self buildIfNeeded];
-    // 立即挂到键盘视图顶层并可见——只要本 tweak 在扩展里加载，就一定能看到一条 38pt 工具栏，
-    // 作为「扩展是否注入成功」的肉眼判定；后续 relayout 会把它精确挪到图标行原位。
-    UIView *root = vc.view;
-    if (root) {
-        if (self.superview != root) [root addSubview:self];
-        [root bringSubviewToFront:self];
-        self.frame = CGRectMake(0, 0, root.bounds.size.width, WP_BAR_H_DEFAULT);
-    }
-    self.hidden = NO;
-}
-
-// 递归在 view 树里找指定类名的子视图（不限于直接子视图）。
-- (UIView *)findClass:(NSString *)clsName inView:(UIView *)v depth:(int)d {
-    if (!v || d > 24) return nil;
-    NSString *cn = NSStringFromClass(v.class);
-    if ([cn isEqualToString:clsName]) return v;
-    for (UIView *s in v.subviews) {
-        UIView *r = [self findClass:clsName inView:s depth:d + 1];
-        if (r) return r;
-    }
-    return nil;
-}
-
-// 递归在 view 树里找「类名含子串」的子视图，优先返回最靠上(y 最小)的。
-- (UIView *)findClassContains:(NSString *)sub inView:(UIView *)v depth:(int)d bestY:(CGFloat *)bestY {
-    if (!v || d > 24) return nil;
-    NSString *cn = NSStringFromClass(v.class);
-    UIView *found = nil;
-    if ([cn rangeOfString:sub].location != NSNotFound) {
-        CGRect f = v.frame;
-        if (f.size.height > 20 && f.size.height < 70 && f.size.width > 200) {
-            if (!found || f.origin.y < *bestY) { found = v; *bestY = f.origin.y; }
-        }
-    }
-    for (UIView *s in v.subviews) {
-        UIView *r = [self findClassContains:sub inView:s depth:d + 1 bestY:bestY];
-        if (r) found = r;
-    }
-    return found;
-}
-
-- (void)relayoutReplacingIconBar {
-    UIInputViewController *vc = _vc;
-    if (!vc) { self.hidden = YES; wp_log(@"[relayout] bail: _vc nil"); return; }
-    UIView *root = vc.view;
-    if (!root) { self.hidden = YES; wp_log(@"[relayout] bail: vc.view nil"); return; }
-    self.hidden = NO; // 只要走到这里就保证可见
-
-    UIView *iconBar = objc_getAssociatedObject(root, "wp.iconBar");
-    NSString *how = objc_getAssociatedObject(root, "wp.iconBarHow");
-    if (!iconBar) {
-        // 1) 精确匹配 frida 实锤的 WBTopBar
-        iconBar = [self findClass:@"WBTopBar" inView:root depth:0];
-        how = @"WBTopBar";
-        // 2) 退而求其次：类名含 TopBar
-        if (!iconBar) {
-            CGFloat bestY = 1e9;
-            iconBar = [self findClassContains:@"TopBar" inView:root depth:0 bestY:&bestY];
-            how = @"*TopBar*";
-        }
-        // 3) 再退化：递归找顶部、高度 28~55、宽>200、子视图>=3 的第一条
-        if (!iconBar) {
-            CGFloat bestY = 1e9;
-            iconBar = [self findIconHeuristicIn:root depth:0 bestY:&bestY];
-            how = @"heuristic";
-        }
-        if (iconBar) {
-            objc_setAssociatedObject(root, "wp.iconBar", iconBar, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            objc_setAssociatedObject(root, "wp.iconBarHow", how, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            CGRect f = iconBar.frame;
-            wp_log([NSString stringWithFormat:@"FOUND iconBar via %@ class=%@ frame={%.1f,%.1f,%.1f,%.1f} subviews=%lu",
-                    how, NSStringFromClass(iconBar.class),
-                    f.origin.x, f.origin.y, f.size.width, f.size.height,
-                    (unsigned long)iconBar.subviews.count]);
-        } else {
-            wp_log(@"NO iconBar found (all strategies failed)");
-        }
-    }
-
-    if (!iconBar) {
-        // 找不到图标行：留在顶部固定 38pt（必定可见），并染成橙色作为「调试态」标记，
-        // 让用户一眼知道 tweak 已注入、只是没匹配到图标行。
-        if (self.superview != root) [root addSubview:self];
-        [root bringSubviewToFront:self];
-        self.backgroundColor = [UIColor colorWithRed:0.95 green:0.55 blue:0.12 alpha:0.98];
-        if (!CGRectEqualToRect(self.frame, CGRectMake(0, 0, root.bounds.size.width, WP_BAR_H_DEFAULT))) {
-            self.frame = CGRectMake(0, 0, root.bounds.size.width, WP_BAR_H_DEFAULT);
-            _built = NO; for (UIView *s in [self.subviews copy]) [s removeFromSuperview]; [self buildIfNeeded];
-        }
-        wp_log(@"[relayout] NOT FOUND iconBar -> 顶部调试态(橙色) visible");
-        return;
-    }
-
-    // 加进图标行「同一个父视图」，坐标系一致，frame 直接取图标行原位。
-    UIView *host = iconBar.superview ?: root;
-    if (self.superview != host) [host addSubview:self];
-    [host bringSubviewToFront:self];
-    self.backgroundColor = [UIColor colorWithWhite:0.12 alpha:0.98]; // 正常深色
-
-    CGRect f = iconBar.frame;
-    CGRect barRect = CGRectMake(f.origin.x, f.origin.y, f.size.width, f.size.height);
-    if (!CGRectEqualToRect(self.frame, barRect)) {
-        self.frame = barRect;
-        _built = NO; for (UIView *s in [self.subviews copy]) [s removeFromSuperview]; [self buildIfNeeded];
-    }
-
-    // 隐藏图标行内容（递归），视觉上由工具栏无缝替代。
-    [self hideAllSubviewsOf:iconBar];
-
-    if (!_geoLogged) {
-        _geoLogged = YES;
-        wp_log([NSString stringWithFormat:@"APPLIED toolbar frame={%.1f,%.1f,%.1f,%.1f} host=%@",
-                self.frame.origin.x, self.frame.origin.y, self.frame.size.width, self.frame.size.height,
-                NSStringFromClass(host.class)]);
-    }
-}
-
-- (void)hideAllSubviewsOf:(UIView *)v {
-    for (UIView *s in v.subviews) {
-        s.hidden = YES;
-        [self hideAllSubviewsOf:s];
-    }
-}
-
-// 递归启发式：找顶部(最小 y)、高度 28~55、宽>200、子视图>=3 的第一条 view。
-- (UIView *)findIconHeuristicIn:(UIView *)v depth:(int)d bestY:(CGFloat *)bestY {
-    if (!v || d > 24) return nil;
-    UIView *best = nil;
-    CGRect f = v.frame;
-    if (f.size.height > 28 && f.size.height < 55 && f.size.width > 200 && v.subviews.count >= 3) {
-        if (f.origin.y < *bestY) { *bestY = f.origin.y; best = v; }
-    }
-    for (UIView *s in v.subviews) {
-        UIView *r = [self findIconHeuristicIn:s depth:d + 1 bestY:bestY];
-        if (r) best = r;
-    }
-    return best;
-}
-
 - (void)onTap:(UIButton *)b {
     wp_hapticBump();
-    UIInputViewController *vc = _vc;
-    if (!vc) return;
-    id proxy = vc.textDocumentProxy;
+    // 工具栏挂在 UIInputView 上，不直接持有 vc。从键盘窗口的响应链里找 UIInputViewController，
+    // 取其 textDocumentProxy 操作光标/文本。
+    id proxy = nil;
+    NSArray *wins = [UIApplication sharedApplication].windows;
+    for (UIWindow *w in wins) {
+        UIResponder *r = w.rootViewController;
+        while (r) {
+            if ([r isKindOfClass:[UIInputViewController class]]) {
+                proxy = [(UIInputViewController *)r textDocumentProxy];
+                break;
+            }
+            r = [r nextResponder];
+        }
+        if (proxy) break;
+    }
+    if (!proxy) {
+        // 退化：直接遍历所有响应者
+        UIResponder *r = [UIApplication sharedApplication];
+        while (r) {
+            if ([r isKindOfClass:[UIInputViewController class]]) {
+                proxy = [(UIInputViewController *)r textDocumentProxy];
+                break;
+            }
+            r = [r nextResponder];
+        }
+    }
     if (!proxy) return;
     NSArray *acts = @[@"left",@"right",@"paste",@"ins:@@",@"ins:#",@"ins:？",@"ins:！"];
     if (b.tag >= acts.count) return;
@@ -316,42 +193,89 @@ static void wp_hapticBump() {
 
 @end
 
-%hook UIInputViewController
+// ---------------- hook 系统键盘视图：向上撑高，工具栏钉顶 ----------------
+%hook UIInputView
 
-static const void *kWpSetupDone = &kWpSetupDone;
+- (void)setFrame:(CGRect)f {
+    // 本 dylib 只注入微信输入法键盘进程(wxkb_plugin)，这里的 UIInputView 即微信键盘。
+    // 向上撑高 WP_GROW（高度+WP_GROW，y-WP_GROW），底部不变、顶部上移腾出一行。
+    f.size.height += WP_GROW;
+    f.origin.y    -= WP_GROW;
+    %orig(f);
+}
+
+- (void)layoutSubviews {
+    %orig;
+    if (!wp_enabled) return;
+    WPToolbar *tb = [WPToolbar shared];
+    [tb buildIfNeeded];
+
+    BOOL foundWB = NO;
+    for (UIView *sv in self.subviews) {
+        NSString *cn = NSStringFromClass(sv.class);
+        if ([cn rangeOfString:@"WB"].location != NSNotFound ||
+            [cn rangeOfString:@"Wetype"].location != NSNotFound) { foundWB = YES; break; }
+    }
+    if (!foundWB) return; // 不是微信键盘视图，不动
+
+    // 把仍停留在顶部区(y < WP_GROW)的直接子视图整体下移 WP_GROW，
+    // 给顶部腾出一行给工具栏；已下移过的(y>=WP_GROW)不再动，幂等自愈。
+    CGRect vf = self.bounds;
+    for (UIView *sv in self.subviews) {
+        if (sv == tb) continue;
+        CGRect f = sv.frame;
+        if (f.origin.y < WP_GROW) {
+            f.origin.y += WP_GROW;
+            sv.frame = f;
+        }
+    }
+    // 工具栏钉到顶部 (0,0,W,WP_GROW)
+    if (tb.superview != self) [self addSubview:tb];
+    [self bringSubviewToFront:tb];
+    CGRect tbFrame = CGRectMake(0, 0, vf.size.width, WP_GROW);
+    if (!CGRectEqualToRect(tb.frame, tbFrame)) {
+        tb.frame = tbFrame;
+        tb.hidden = NO;
+    }
+    tb.hidden = NO;
+
+    static BOOL sFirst = YES;
+    if (sFirst) {
+        sFirst = NO;
+        NSMutableString *tree = [NSMutableString string];
+        wp_dumpTree(self, 0, tree);
+        wp_log([NSString stringWithFormat:
+                @"[kb] FIRST UIInputView bounds={%.1f,%.1f,%.1f,%.1f} subviews=%lu\n%@",
+                vf.origin.x, vf.origin.y, vf.size.width, vf.size.height,
+                (unsigned long)self.subviews.count, tree]);
+        wp_log([NSString stringWithFormat:
+                @"[kb] APPLIED toolbar at top band (0,0,%.1f,%.1f); candidate row shifted down by %d",
+                vf.size.width, (float)WP_GROW, (int)WP_GROW]);
+    }
+}
+
+%end
+
+%hook UIInputViewController
 
 - (void)viewDidLoad {
     %orig;
     if (!wp_enabled) return;
-    [[WPToolbar shared] attachTo:self];
+    [[WPToolbar shared] buildIfNeeded]; // 确保工具栏已构建（实际挂载在 UIInputView 里）
 }
 
 - (void)viewDidLayoutSubviews {
     %orig;
-    if (!wp_enabled) {
-        wp_log(@"[layout] disabled via prefs, skip");
-        return;
-    }
-    UIInputViewController *vc = self;
-    static BOOL sFirstLayout = YES;
-    if (sFirstLayout) {
-        sFirstLayout = NO;
-        NSMutableString *tree = [NSMutableString string];
-        wp_dumpTree(vc.view, 0, tree);
+    if (!wp_enabled) return;
+    // 仅记录；真正的布局在 UIInputView 的 layoutSubviews 里完成
+    static BOOL sFirst = YES;
+    if (sFirst) {
+        sFirst = NO;
         wp_log([NSString stringWithFormat:
-                @"[layout] FIRST vc=%@ view=%@ subviews=%d\n%@",
-                NSStringFromClass(vc.class),
-                vc.view ? NSStringFromClass(vc.view.class) : @"nil",
-                (int)(vc.view ? vc.view.subviews.count : 0),
-                tree]);
-    } else {
-        wp_log([NSString stringWithFormat:
-                @"[layout] vc=%@ view=%@ subviews=%d",
-                NSStringFromClass(vc.class),
-                vc.view ? NSStringFromClass(vc.view.class) : @"nil",
-                (int)(vc.view ? vc.view.subviews.count : 0)]);
+                @"[vc] FIRST vc=%@ view=%@",
+                NSStringFromClass(self.class),
+                self.view ? NSStringFromClass(self.view.class) : @"nil"]);
     }
-    [[WPToolbar shared] relayoutReplacingIconBar];
 }
 
 %end
@@ -359,12 +283,11 @@ static const void *kWpSetupDone = &kWpSetupDone;
 %ctor {
     @autoreleasepool {
         wp_loadPrefs();
-        wp_resolveLogPath(); // 确定可写路径（会清掉 probe 行）
+        wp_resolveLogPath();
         wp_log([NSString stringWithFormat:
-                @"[ctor] WetypePlus 3.0.5 loaded | process=%@ bundle=%@ NSTemporaryDirectory=%@ logPath=%@",
+                @"[ctor] WetypePlus 3.0.6 loaded | process=%@ bundle=%@ logPath=%@",
                 ([[NSProcessInfo processInfo] processName] ?: @"?"),
                 ([[NSBundle mainBundle] bundleIdentifier] ?: @"?"),
-                NSTemporaryDirectory() ?: @"?",
                 wp_resolveLogPath()]);
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDarwinNotifyCenter(), NULL,
