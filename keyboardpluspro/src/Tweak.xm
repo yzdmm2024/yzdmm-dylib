@@ -1622,10 +1622,20 @@ static void KBDarwinNotificationCallback(CFNotificationCenterRef center, void *o
 
 %ctor {
     @autoreleasepool {
-        NSLog(@"[KeyboardPlusPro] v%@ 加载成功 (arm64 / iOS 16)", KB_VERSION);
-        NSLog(@"[KeyboardPlusPro] 设备: %@, App: %@",
-              [UIDevice currentDevice].model ?: @"unknown",
-              [KBUtils applicationBundleID]);
+        NSString *kbpHostBid = [KBUtils applicationBundleID];
+        // ★★★ 关键系统进程（主界面 SpringBoard / 设置 Preferences）绝不初始化 ★★★
+        //   实测：tweak 一旦注入 com.apple.springboard，在 SpringBoard 里初始化/挂 hook 会卡死
+        //   主界面 → 系统看门狗杀 SpringBoard → 注销转圈 → 开机即看门狗（1.0.12 的 AnyApplication
+        //   和 1.0.13 的 springboard 注入都是这个坑）。这里在 %ctor 最开头直接 return，
+        //   即使 Filter 误注入关键进程也不会崩系统（双保险，绝不依赖 Filter 配置正确）。
+        if ([kbpHostBid isEqualToString:@"com.apple.springboard"] ||
+            [kbpHostBid isEqualToString:@"com.apple.Preferences"]) {
+            NSLog(@"[KeyboardPlusPro] 在关键系统进程(%@)内，跳过全部初始化（防注销/watchdog）", kbpHostBid);
+            return;
+        }
+
+        NSLog(@"[KeyboardPlusPro] v%@ 加载成功 (arm64 / iOS 16), App: %@",
+              KB_VERSION, kbpHostBid);
         
         // 初始化所有管理器
         [KBPreferences shared];
@@ -1640,15 +1650,8 @@ static void KBDarwinNotificationCallback(CFNotificationCenterRef center, void *o
         [KBActionButtonManager shared];
         [KBInputEnhancer shared];
         
-        // ★ 设置进程(com.apple.Preferences)不初始化键盘 hook：避免点击设置入口触发 watchdog 重启
-        //   注入范围已放开为所有 App(含微信等三方 App)，但设置进程绝不能跑 UIKeyboard* hook。
-        NSString *kbpHostBid = [KBUtils applicationBundleID];
-        if (![kbpHostBid isEqualToString:@"com.apple.Preferences"]) {
-            %init(KBP);
-            NSLog(@"[KeyboardPlusPro] 键盘 hook 已初始化 (App: %@)", kbpHostBid);
-        } else {
-            NSLog(@"[KeyboardPlusPro] 在设置进程内，跳过键盘 hook 初始化（防 watchdog 重启）");
-        }
+        %init(KBP);
+        NSLog(@"[KeyboardPlusPro] 键盘 hook 已初始化 (App: %@)", kbpHostBid);
         
         // 注册偏好设置变更通知 (来自设置面板)
         [[NSNotificationCenter defaultCenter] addObserverForName:@"com.yzdmm.keyboardplusprefs.changed"
