@@ -42,7 +42,7 @@
 // ============================================================================
 // 通用定义 & 配置
 // ============================================================================
-#define KB_VERSION @"1.0.0"
+#define KB_VERSION @"1.0.6"
 #define KB_PREFS_PATH "/var/mobile/Library/Preferences/com.yzdmm.keyboardpluspro.plist"
 #define KB_CLIPBOARD_FILE "/var/mobile/Library/KeyboardPlusPro/clipboard.plist"
 #define KB_CLIPBOARD_MAX_DEFAULT 50
@@ -840,6 +840,10 @@ static KBPreferences *g_KBPrefs = nil;
 }
 
 - (void)installGesturesOnKeyboard:(UIView *)keyboardView {
+    // 去重：layoutSubviews 会频繁调用，已装过就跳过，避免手势识别器无限堆叠
+    if (objc_getAssociatedObject(keyboardView, "kbgGesturesInstalled") != nil) return;
+    objc_setAssociatedObject(keyboardView, "kbgGesturesInstalled", @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
     // 向左滑动删除整词
     if ([[KBPreferences shared] boolForKey:@"gestureSwipeLeftDeleteWord" defaultValue:YES]) {
         UISwipeGestureRecognizer *swipeLeft = [[UISwipeGestureRecognizer alloc]
@@ -1039,12 +1043,6 @@ static KBPreferences *g_KBPrefs = nil;
             [impl performSelector:@selector(updateLayout)];
         }
     }
-    // 更新 shift 按键外观
-    id kbImpl = [KBUtils keyboardImpl];
-    if (kbImpl && [kbImpl respondsToSelector:@selector(shiftLocked)]) {
-        // 设置 shiftLocked 状态
-        [kbImpl setValue:@(locked) forKey:@"shiftLocked"];
-    }
     [KBUtils triggerHapticWithIntensity:0.5];
 }
 
@@ -1222,7 +1220,12 @@ static KBPreferences *g_KBPrefs = nil;
 
 - (UIView *)actionBarForKeyboard:(UIView *)keyboardView {
     if (![[KBPreferences shared] boolForKey:@"actionBarEnabled" defaultValue:YES]) return nil;
-    
+
+    // 去重：layoutSubviews 频繁调用，已存在动作栏就直接返回，避免无限堆叠
+    for (UIView *existing in [keyboardView subviews]) {
+        if (existing.tag == 0xDBB1) return nil;
+    }
+
     NSString *actionStr = [[KBPreferences shared] objectForKey:@"actionButtons"
                                                     defaultValue:@"selectAll,copy,cut,paste,undo,redo"];
     NSArray *actions = [actionStr componentsSeparatedByString:@","];
@@ -1401,8 +1404,15 @@ static KBPreferences *g_KBPrefs = nil;
 - (void)updateLayout {
     %orig;
     
-    // 应用布局自定义
-    UIView *kbView = [self valueForKey:@"_keyboardView"];
+    // 应用布局自定义。
+    // 注意：UIKeyboardImpl 根本没有 _keyboardView 这个 KVC key，
+    // 用 valueForKey: 会抛 NSUnknownKeyException → SpringBoard 崩进安全模式。
+    // 正确访问器是 _layout（返回键盘布局视图），这里用 performSelector 取，绝不走 KVC。
+    UIView *kbView = nil;
+    if ([self respondsToSelector:@selector(_layout)]) {
+        id lv = [self performSelector:@selector(_layout)];
+        if ([lv isKindOfClass:[UIView class]]) kbView = (UIView *)lv;
+    }
     if (kbView) {
         [[KBLayoutManager shared] applyLayoutCustomization:kbView];
         [[KBThemeEngine shared] applyThemeToKeyboard:kbView];
@@ -1540,10 +1550,18 @@ static KBPreferences *g_KBPrefs = nil;
         // 对密码输入框自动切数字键盘
         if ([[KBPreferences shared] boolForKey:@"autoNumberPadForPassword" defaultValue:YES]) {
             if ([KBUtils isPasswordField]) {
-                // 通知键盘切换到数字布局
+                // 通知键盘切换到数字布局。
+                // 用 NSInvocation 正确传标量参数：performSelector:withObject:
+                // 会把 NSNumber 的指针当 int 传给期望 UIKeyboardType 的方法，类型错。
                 id impl = [KBUtils keyboardImpl];
                 if (impl && [impl respondsToSelector:@selector(setKeyboardType:)]) {
-                    [impl performSelector:@selector(setKeyboardType:) withObject:@(UIKeyboardTypeNumberPad)];
+                    NSMethodSignature *sig = [impl methodSignatureForSelector:@selector(setKeyboardType:)];
+                    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                    [inv setSelector:@selector(setKeyboardType:)];
+                    [inv setTarget:impl];
+                    UIKeyboardType kt = UIKeyboardTypeNumberPad;
+                    [inv setArgument:&kt atIndex:2];
+                    [inv invoke];
                 }
             }
         }
