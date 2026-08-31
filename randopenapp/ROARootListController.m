@@ -10,10 +10,8 @@
 
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
+#import <Preferences/Preferences.h>
 #import <objc/runtime.h>
-
-// 前向声明 PSListController（Preferences 头文件在 iOS SDK 中不存在）
-@class PSListController;
 
 @interface ROARootListController : PSListController
 @end
