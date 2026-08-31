@@ -130,13 +130,20 @@ static void wp_notifyCallback(CFNotificationCenterRef center, void *observer,
 - (void)showAbove:(CGRect)kbFrame {
     if (!wp_enabled) { self.hidden = YES; return; }
     [self buildIfNeeded];
+    // 找到键盘所在的 window：优先 UITextEffectsWindow / 名字含 Keyboard 的 window；
+    // 兜底取当前窗口列表里 level 最高的可见 window（iOS 16 键盘 window 一般 level 最高）。
     UIWindow *tew = nil;
+    UIWindow *top = nil;
+    UIWindowLevel topLevel = -MAXFLOAT;
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
-        if ([w isKindOfClass:NSClassFromString(@"UITextEffectsWindow")]) { tew = w; break; }
+        NSString *cn = NSStringFromClass(w.class);
+        if ([cn containsString:@"TextEffects"] || [cn containsString:@"Keyboard"]) { tew = w; break; }
+        if (!w.hidden && w.windowLevel > topLevel) { topLevel = w.windowLevel; top = w; }
     }
-    if (!tew) tew = [UIApplication sharedApplication].keyWindow;
+    if (!tew) tew = top ?: [UIApplication sharedApplication].keyWindow;
     if (!tew) return;
     if (self.superview != tew) [tew addSubview:self];
+    [tew bringSubviewToFront:self];
     // 工具栏放在键盘「底部空隙」(spacebar 下方 / home-bar 上方那道留白)：
     // 顶边贴键盘底边，落在键盘最下方的空白里——不挡输入框、也不盖数字行。
     // 代价：若某键盘底部留白 < WP_BAR_H，会轻微压到空格键那一行最下缘。
@@ -153,6 +160,12 @@ static void wp_notifyCallback(CFNotificationCenterRef center, void *observer,
 %ctor {
     @autoreleasepool {
         wp_loadPrefs();
+        // 诊断：tweak 一旦被注入目标 App 就会写这个文件，用于确认是否真的加载进 App。
+        // roothide 默认不注入普通 App，所以「什么都不显示」多半是没注入——看这个文件就知道。
+        NSString *mark = [NSString stringWithFormat:@"WetypePlus loaded in %@ at %@\n",
+            ([[NSBundle mainBundle] bundleIdentifier] ?: @"?"), [NSDate date]];
+        [mark writeToFile:@"/var/mobile/wp_injected.log" atomically:YES
+                 encoding:NSUTF8StringEncoding error:nil];
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDarwinNotifyCenter(), NULL,
             (CFNotificationCallback)wp_notifyCallback,
