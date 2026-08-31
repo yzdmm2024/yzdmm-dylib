@@ -81,11 +81,10 @@ static void roa_testRequest(CFNotificationCenterRef center, void *observer,
     [self stop];
     _todayKey = [self dayKeyForDate:[NSDate date]];
 
-    NSLog(@"[ROA] v1.2.0 settings => enabled=%d bundleID=%@ w1=%02ld:%02ld-%02ld:%02ld w2=%02ld:%02ld-%02ld:%02ld workdays=%d w1Done=%@ w2Done=%@",
+    NSLog(@"[ROA] v1.3.0 settings => enabled=%d bundleID=%@ w1=%02ld:%02ld-%02ld:%02ld w2=%02ld:%02ld-%02ld:%02ld w1Done=%@ w2Done=%@",
           [self isEnabled], [self targetBundleID] ?: @"nil",
           (long)[self startHour], (long)[self startMin], (long)[self endHour], (long)[self endMin],
           (long)[self start2Hour], (long)[self start2Min], (long)[self end2Hour], (long)[self end2Min],
-          [self workdaysOnly],
           [[self prefs] stringForKey:kROALastOpenW1] ?: @"-",
           [[self prefs] stringForKey:kROALastOpenW2] ?: @"-");
 
@@ -179,7 +178,6 @@ static void roa_testRequest(CFNotificationCenterRef center, void *observer,
 - (void)computeTargets {
     if (![self isEnabled]) { NSLog(@"[ROA] disabled, no targets."); return; }
     if (![self targetBundleID]) { NSLog(@"[ROA] no bundle id."); return; }
-    if ([self workdaysOnly] && ![self isWorkdayForDate:[NSDate date]]) { NSLog(@"[ROA] weekend, skip."); return; }
 
     NSInteger nowMin = [self nowMinutesOfDay];
 
@@ -300,20 +298,22 @@ static void roa_testRequest(CFNotificationCenterRef center, void *observer,
     NSLog(@"[ROA] scheme open result = %@", ok ? @"YES" : @"NO");
 }
 
-- (void)launchAppWithBundleID:(NSString *)bundleID {
+- (BOOL)launchAppWithBundleID:(NSString *)bundleID {
     Class LSAppWorkspace = NSClassFromString(@"LSApplicationWorkspace");
     if (LSAppWorkspace) {
         id ws = [LSAppWorkspace performSelector:NSSelectorFromString(@"defaultWorkspace")];
         if (ws) {
             BOOL ok = (BOOL)[ws performSelector:NSSelectorFromString(@"openApplicationWithBundleID:")
                                      withObject:bundleID];
-            NSLog(@"[ROA] openApplicationWithBundleID result = %@", ok ? @"YES" : @"NO");
-            return;
+            if (ok) {
+                return YES;
+            }
         }
     }
+    return NO;
 }
 
-// 到达目标时刻，打开并仅标记当前窗口已触发
+// 尽量快速拉起：优先 LSApplicationWorkspace（无需 scheme），失败才退回 URL scheme
 - (void)openTargetForWindow:(NSInteger)windex doneKey:(NSString *)doneKey {
     NSString *bundleID = [self targetBundleID];
     if (!bundleID) return;
@@ -322,9 +322,11 @@ static void roa_testRequest(CFNotificationCenterRef center, void *observer,
     [[self prefs] synchronize];
     NSLog(@"[ROA] window%ld opened, marking done.", (long)windex);
 
-    NSString *scheme = [[self prefs] stringForKey:@"ROAURLScheme"];
-    [self launchAppWithURLScheme:(scheme.length ? scheme : bundleID)];
-    [self launchAppWithBundleID:bundleID];
+    BOOL opened = [self launchAppWithBundleID:bundleID];
+    if (!opened) {
+        NSString *scheme = [[self prefs] stringForKey:@"ROAURLScheme"];
+        [self launchAppWithURLScheme:(scheme.length ? scheme : bundleID)];
+    }
 }
 
 // 设置面板"立即测试打开"按钮：立即拉起，不影响任何窗口标记
@@ -332,9 +334,12 @@ static void roa_testRequest(CFNotificationCenterRef center, void *observer,
     NSString *bundleID = [self targetBundleID];
     if (!bundleID) { NSLog(@"[ROA] test: no bundle id."); return; }
     NSLog(@"[ROA] test open requested for %@", bundleID);
-    NSString *scheme = [[self prefs] stringForKey:@"ROAURLScheme"];
-    [self launchAppWithURLScheme:(scheme.length ? scheme : bundleID)];
-    [self launchAppWithBundleID:bundleID];
+
+    BOOL opened = [self launchAppWithBundleID:bundleID];
+    if (!opened) {
+        NSString *scheme = [[self prefs] stringForKey:@"ROAURLScheme"];
+        [self launchAppWithURLScheme:(scheme.length ? scheme : bundleID)];
+    }
 }
 
 @end
