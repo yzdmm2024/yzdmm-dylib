@@ -1,6 +1,7 @@
 // KeyboardPlusPro.xm - iOS 16 原生键盘增强 Tweak
+#import "kb_private.h"
 // 目标：iPhone 12 Pro / iOS 16.6.1 / Relaxin (rootless, ElleKit TweakInject)
-// 工具链：logos2objc.py + clang(arm64) + lld + adhoc_sign (纯 Windows 原生交叉编译)
+// 工具链：theos (macos-14 原生 clang/ld) → 真 FAT arm64+arm64e，见 yzdmm-dylib build-kbp.yml
 //
 // 功能模块：
 //   1. 增强光标 & 文本选择 (4 方向移动、滑动选词、点击空白定位)
