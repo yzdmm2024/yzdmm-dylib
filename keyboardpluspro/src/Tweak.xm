@@ -1455,31 +1455,44 @@ static KBPreferences *g_KBPrefs = nil;
 
 %hook UIKeyboardLayout
 
-// 键盘布局已加载完成
 - (void)layoutSubviews {
     %orig;
-    
+    [self kbp_layoutSubviews];
+}
+
+// 工具栏/手势统一逻辑（UIKeyboardLayout 与 UIKeyboardLayoutStar 共用）
+%new
+- (void)kbp_layoutSubviews {
+    // 工具栏/符号栏加到 UIKeyboardImpl（不裁剪的键盘根容器）上；
+    // 若加到布局视图(默认 clipsToBounds=YES)且 y 为负，会被裁掉 → “键盘上无工具栏”。
+    UIView *target = (UIView *)self;
+    while (target && ![target isKindOfClass:[UIKeyboardImpl class]]) {
+        target = target.superview;
+    }
+    if (!target) target = (UIView *)self;
+
     // 安装自定义手势
-    [[KBGestureEngine shared] installGesturesOnKeyboard:self];
-    
+    [[KBGestureEngine shared] installGesturesOnKeyboard:(UIView *)self];
+
     // 添加符号栏（如果已启用）
-    UIView *symbolBar = [[KBSymbolBarManager shared] symbolBarForKeyboard:self];
+    UIView *symbolBar = [[KBSymbolBarManager shared] symbolBarForKeyboard:(UIView *)self];
     if (symbolBar && symbolBar.superview == nil) {
-        [self addSubview:symbolBar];
+        [target addSubview:symbolBar];
     }
-    
+
     // 添加快捷动作栏
-    UIView *actionBar = [[KBActionButtonManager shared] actionBarForKeyboard:self];
+    UIView *actionBar = [[KBActionButtonManager shared] actionBarForKeyboard:(UIView *)self];
     if (actionBar && actionBar.superview == nil) {
-        [self addSubview:actionBar];
+        [target addSubview:actionBar];
     }
-    
+
     // 安装空格拖拽光标手势
     if ([[KBPreferences shared] boolForKey:@"cursorEnabled" defaultValue:YES]) {
-        // 查找空格键并添加拖拽手势
         [self performSelector:@selector(findSpaceKeyAndAddGesture)];
     }
 }
+
+// 辅助：查找空格键添加手势
 
 // 辅助：查找空格键添加手势
 %new
@@ -1566,6 +1579,17 @@ static KBPreferences *g_KBPrefs = nil;
             }
         }
     }
+}
+
+%end
+
+// iOS 16 真实键盘布局类是 UIKeyboardLayoutStar（继承 UIKeyboardLayout 并重写 layoutSubviews）。
+// 只 hook 父类时 Star 实例走自己的实现，父类钩子不触发 → 工具栏/手势/符号栏从未执行。补 hook Star。
+%hook UIKeyboardLayoutStar
+
+- (void)layoutSubviews {
+    %orig;
+    [self kbp_layoutSubviews];
 }
 
 %end
