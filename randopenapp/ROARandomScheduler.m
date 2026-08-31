@@ -184,41 +184,36 @@ static void roa_testRequest(CFNotificationCenterRef center, void *observer,
     NSInteger nowMin = [self nowMinutesOfDay];
 
     // 时窗①
-    [self computeTargetForWindow:1
-                          target:&_targetDate1
+    _targetDate1 = [self computedTargetForWindow:1
                         startMin:[self minutesForHour:[self startHour] minute:[self startMin]]
                           endMin:[self minutesForHour:[self endHour] minute:[self endMin]]
                            doneKey:kROALastOpenW1
                           nowMin:nowMin];
 
     // 时窗②（未配置时自动跳过）
-    [self computeTargetForWindow:2
-                          target:&_targetDate2
+    _targetDate2 = [self computedTargetForWindow:2
                         startMin:[self minutesForHour:[self start2Hour] minute:[self start2Min]]
                           endMin:[self minutesForHour:[self end2Hour] minute:[self end2Min]]
                            doneKey:kROALastOpenW2
                           nowMin:nowMin];
 }
 
-// 为单个窗口安排目标时刻
-- (void)computeTargetForWindow:(NSInteger)windex
-                        target:(NSDate * _Nonnull *)targetPtr
-                      startMin:(NSInteger)ws
-                        endMin:(NSInteger)we
-                        doneKey:(NSString *)doneKey
-                        nowMin:(NSInteger)nowMin {
+// 为单个窗口计算目标时刻（返回 NSDate，nil 表示不安排）
+- (NSDate *)computedTargetForWindow:(NSInteger)windex
+                           startMin:(NSInteger)ws
+                             endMin:(NSInteger)we
+                            doneKey:(NSString *)doneKey
+                             nowMin:(NSInteger)nowMin {
     // 未配置（结束 <= 开始即无效）
     if (we <= ws) {
         NSLog(@"[ROA] window%ld not configured, skip.", (long)windex);
-        *targetPtr = nil;
-        return;
+        return nil;
     }
     // 今日已触发过该窗口 -> 不再安排
     NSString *done = [[self prefs] stringForKey:doneKey];
     if (done.length > 0 && [done isEqualToString:_todayKey]) {
         NSLog(@"[ROA] window%ld already triggered today.", (long)windex);
-        *targetPtr = nil;
-        return;
+        return nil;
     }
     // 目标时刻：若当前在窗口内，从 [max(now+1, ws) .. we] 随机；若当前早于窗口，从整窗随机；已过则不安排
     NSInteger earliest, latest;
@@ -229,26 +224,24 @@ static void roa_testRequest(CFNotificationCenterRef center, void *observer,
         if (earliest > latest) earliest = ws;          // 接近末尾兜底
     } else {
         NSLog(@"[ROA] window%ld already passed today.", (long)windex);
-        *targetPtr = nil;
-        return;
+        return nil;
     }
     NSInteger pick = earliest + arc4random_uniform((uint32_t)(latest - earliest + 1));
-    *targetPtr = [self dateTodayForMinute:pick];
+    NSDate *target = [self dateTodayForMinute:pick];
 
     NSDateFormatter *f = [[NSDateFormatter alloc] init];
     f.dateFormat = @"HH:mm";
-    NSLog(@"[ROA] window%ld target scheduled at %@", (long)windex, [f stringFromDate:*targetPtr]);
+    NSLog(@"[ROA] window%ld target scheduled at %@", (long)windex, [f stringFromDate:target]);
+    return target;
 }
 
 - (NSDate *)dateTodayForMinute:(NSInteger)min {
-    NSCalendar *cal = [[NSCalendar currentCalendar] retain];
+    NSCalendar *cal = [NSCalendar currentCalendar];
     NSDateComponents *c = [cal components:NSCalendarUnitYear | NSCalendarUnitMonth | NSCalendarUnitDay fromDate:[NSDate date]];
     c.hour   = min / 60;
     c.minute = min % 60;
     c.second = 0;
-    NSDate *d = [cal dateFromComponents:c];
-    [cal release];
-    return d;
+    return [cal dateFromComponents:c];
 }
 
 #pragma mark - 轮询
