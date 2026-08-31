@@ -8,7 +8,9 @@
 			<array>
 				<!-- 系统键盘注入：覆盖 SpringBoard + 系统 App + 三方 App -->
 				<string>com.apple.springboard</string>
-				<string>com.apple.Preferences</string>
+				<!-- 不要注入 com.apple.Preferences：键盘 tweak 无需进设置进程；注入会让 UIKeyboard* hook
+				     在设置进程加载，干扰设置面板/偏好 bundle 加载，实测触发点击设置入口的 watchdog 重启。
+				     设置面板由 PreferenceLoader 独立加载 bundle，与此 Filter 无关。 -->
 				<string>com.apple.MobileSMS</string>
 				<string>com.apple.mobilemail</string>
 				<string>com.apple.mobilenotes</string>
