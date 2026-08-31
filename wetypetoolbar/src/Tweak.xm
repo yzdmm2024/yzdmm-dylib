@@ -1,15 +1,17 @@
-// WetypePlus 3.0.2 — 注入微信输入法键盘扩展进程，用工具栏替换顶部图标行(WBTopBar)。
+// WetypePlus 3.0.3 — 诊断增强版。
 //
-// 关键修正（相对 3.0.1）：
-//   3.0.1 的 probeIconBarIn: 只查 vc.view 的「直接子视图」，但图标行的真实类名是
-//   WBTopBar，它埋在 7 层嵌套里(UIInputView->_UIInputViewContent->WBRootInputView->
-//   WBMainInputView->WBTopBar)，永远不是直接子视图 → 永远命中不了 → 退化成 y=0/38pt
-//   固定条，而真正的图标行(嵌套子视图)也在 y≈0 → 视觉重叠 == "还是一样"。
-//   另外本扩展里 vc.view.frame 全为 0，导致之前的宽度判据也失效。
+// 相对 3.0.2 的变化：
+//   1) 日志统一写到一个文件 wp_geo.log，且 %ctor 启动时「立即写一行」。
+//      判读规则（非常重要）：
+//        - wp_geo.log 存在且有 [ctor] 行      => 注入成功，tweak 已加载；
+//        - wp_geo.log 完全不存在              => dylib 根本没加载（filter 不匹配 / per-app 没开 /
+//                                               deb 没真正安装 / 键盘进程没重启）。
+//   2) 日志路径多候选兜底：/var/mobile/wp_geo.log -> /var/mobile/Library/Caches/wp_geo.log
+//      -> /tmp/wp_geo.log。首行会打印「最终生效路径」，规避某些进程对 /var/mobile 无写权限。
+//   3) viewDidLayoutSubviews 每次调用都写入口日志（vc 类名 / view 类名 / 子视图数 / enabled），
+//      首次调用额外 dump 前 3 层视图树，直接从 tweak 视角确认 WBTopBar 是否可达。
 //
-//   3.0.2：在 vc.view 上「递归」查找，按类名精确匹配 WBTopBar（frida 已实锤该名字）；
-//   命中后读它的真实 frame，把工具栏加进它「同一个父视图」(同坐标系)，并把 WBTopBar
-//   的所有 subview 递归 hidden。不再依赖 vc.view.frame。真实几何写进 wp_geo.log 供核对。
+// 工具栏定位逻辑（递归按类名 WBTopBar 命中图标行、占据其原位、隐藏其按钮）保持不变。
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
@@ -20,6 +22,50 @@
 
 static BOOL wp_enabled = YES;
 static BOOL wp_haptic  = YES;
+
+// ---------------- 日志（多路径兜底） ----------------
+static NSString *g_wpLogPath = nil;
+
+static NSString *wp_resolveLogPath() {
+    if (g_wpLogPath) return g_wpLogPath;
+    NSArray *cands = @[
+        @"/var/mobile/wp_geo.log",
+        @"/var/mobile/Library/Caches/wp_geo.log",
+        @"/tmp/wp_geo.log"
+    ];
+    for (NSString *f in cands) {
+        // 先 probe 这一行，能写说明路径可用，随即清空，避免污染日志
+        if ([@"probe\n" writeToFile:f atomically:YES encoding:NSUTF8StringEncoding error:nil]) {
+            [[NSData data] writeToFile:f atomically:YES]; // 清空成空文件
+            g_wpLogPath = f;
+            return f;
+        }
+    }
+    g_wpLogPath = cands.firstObject; // 全都不行也硬写一个，至少看报错
+    return g_wpLogPath;
+}
+
+static void wp_log(NSString *line) {
+    NSString *file = wp_resolveLogPath();
+    NSString *stamp = [NSString stringWithFormat:@"[%@] %@\n", [NSDate date], line];
+    NSString *cur = [NSString stringWithContentsOfFile:file encoding:NSUTF8StringEncoding error:nil] ?: @"";
+    if (cur.length > 20000) cur = [cur substringFromIndex:cur.length - 10000]; // 防无限增长
+    [[cur stringByAppendingString:stamp] writeToFile:file
+                                          atomically:YES
+                                            encoding:NSUTF8StringEncoding
+                                               error:nil];
+}
+
+// 递归 dump 视图树（限前 3 层），直接从 tweak 视角看键盘层级
+static void wp_dumpTree(UIView *v, int depth, NSMutableString *out) {
+    if (!v || depth > 3) return;
+    for (int i = 0; i < depth; i++) [out appendString:@"  "];
+    CGRect f = v.frame;
+    [out appendFormat:@"%@ {%.1f,%.1f,%.1f,%.1f} sub=%lu\n",
+        NSStringFromClass(v.class), f.origin.x, f.origin.y, f.size.width, f.size.height,
+        (unsigned long)v.subviews.count];
+    for (UIView *s in v.subviews) wp_dumpTree(s, depth + 1, out);
+}
 
 static void wp_loadPrefs() {
     NSString *path = [NSString stringWithFormat:@"/var/mobile/Library/Preferences/%@.plist", WP_DOMAIN];
@@ -39,15 +85,6 @@ static void wp_hapticBump() {
     if (!wp_haptic) return;
     UISelectionFeedbackGenerator *g = [[UISelectionFeedbackGenerator alloc] init];
     [g selectionChanged];
-}
-
-static void wp_log(NSString *file, NSString *line) {
-    NSString *stamp = [NSString stringWithFormat:@"[%@] %@\n", [NSDate date], line];
-    NSString *cur = [NSString stringWithContentsOfFile:file encoding:NSUTF8StringEncoding error:nil] ?: @"";
-    [[cur stringByAppendingString:stamp] writeToFile:file
-                                          atomically:YES
-                                            encoding:NSUTF8StringEncoding
-                                               error:nil];
 }
 
 @interface WPToolbar : UIView
@@ -142,9 +179,9 @@ static void wp_log(NSString *file, NSString *line) {
 
 - (void)relayoutReplacingIconBar {
     UIInputViewController *vc = _vc;
-    if (!vc) { self.hidden = YES; return; }
+    if (!vc) { self.hidden = YES; wp_log(@"[relayout] bail: _vc nil"); return; }
     UIView *root = vc.view;
-    if (!root) { self.hidden = YES; return; }
+    if (!root) { self.hidden = YES; wp_log(@"[relayout] bail: vc.view nil"); return; }
 
     UIView *iconBar = objc_getAssociatedObject(root, "wp.iconBar");
     NSString *how = objc_getAssociatedObject(root, "wp.iconBarHow");
@@ -168,13 +205,12 @@ static void wp_log(NSString *file, NSString *line) {
             objc_setAssociatedObject(root, "wp.iconBar", iconBar, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             objc_setAssociatedObject(root, "wp.iconBarHow", how, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             CGRect f = iconBar.frame;
-            wp_log(@"/var/mobile/wp_geo.log",
-                   [NSString stringWithFormat:@"FOUND iconBar via %@ class=%@ frame={%.1f,%.1f,%.1f,%.1f} subviews=%lu",
+            wp_log([NSString stringWithFormat:@"FOUND iconBar via %@ class=%@ frame={%.1f,%.1f,%.1f,%.1f} subviews=%lu",
                     how, NSStringFromClass(iconBar.class),
                     f.origin.x, f.origin.y, f.size.width, f.size.height,
                     (unsigned long)iconBar.subviews.count]);
         } else {
-            wp_log(@"/var/mobile/wp_geo.log", @"NO iconBar found (all strategies failed)");
+            wp_log(@"NO iconBar found (all strategies failed)");
         }
     }
 
@@ -206,8 +242,7 @@ static void wp_log(NSString *file, NSString *line) {
 
     if (!_geoLogged) {
         _geoLogged = YES;
-        wp_log(@"/var/mobile/wp_geo.log",
-               [NSString stringWithFormat:@"APPLIED toolbar frame={%.1f,%.1f,%.1f,%.1f} host=%@",
+        wp_log([NSString stringWithFormat:@"APPLIED toolbar frame={%.1f,%.1f,%.1f,%.1f} host=%@",
                 self.frame.origin.x, self.frame.origin.y, self.frame.size.width, self.frame.size.height,
                 NSStringFromClass(host.class)]);
     }
@@ -273,7 +308,29 @@ static const void *kWpSetupDone = &kWpSetupDone;
 
 - (void)viewDidLayoutSubviews {
     %orig;
-    if (!wp_enabled) return;
+    if (!wp_enabled) {
+        wp_log(@"[layout] disabled via prefs, skip");
+        return;
+    }
+    UIInputViewController *vc = self;
+    static BOOL sFirstLayout = YES;
+    if (sFirstLayout) {
+        sFirstLayout = NO;
+        NSMutableString *tree = [NSMutableString string];
+        wp_dumpTree(vc.view, 0, tree);
+        wp_log([NSString stringWithFormat:
+                @"[layout] FIRST vc=%@ view=%@ subviews=%d\n%@",
+                NSStringFromClass(vc.class),
+                vc.view ? NSStringFromClass(vc.view.class) : @"nil",
+                (int)(vc.view ? vc.view.subviews.count : 0),
+                tree]);
+    } else {
+        wp_log([NSString stringWithFormat:
+                @"[layout] vc=%@ view=%@ subviews=%d",
+                NSStringFromClass(vc.class),
+                vc.view ? NSStringFromClass(vc.view.class) : @"nil",
+                (int)(vc.view ? vc.view.subviews.count : 0)]);
+    }
     [[WPToolbar shared] relayoutReplacingIconBar];
 }
 
@@ -282,9 +339,12 @@ static const void *kWpSetupDone = &kWpSetupDone;
 %ctor {
     @autoreleasepool {
         wp_loadPrefs();
-        wp_log(@"/var/mobile/wp_kb_loaded.log",
-               [NSString stringWithFormat:@"[ctor] WetypePlus(KEYBOARD) loaded in %@ at %@",
-                ([[NSBundle mainBundle] bundleIdentifier] ?: @"?"), [NSDate date]]);
+        wp_resolveLogPath(); // 确定可写路径（会清掉 probe 行）
+        wp_log([NSString stringWithFormat:
+                @"[ctor] WetypePlus 3.0.3 loaded | process=%@ bundle=%@ logPath=%@",
+                ([[NSProcessInfo processInfo] processName] ?: @"?"),
+                ([[NSBundle mainBundle] bundleIdentifier] ?: @"?"),
+                wp_resolveLogPath()]);
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDarwinNotifyCenter(), NULL,
             (CFNotificationCallback)wp_notifyCallback,
