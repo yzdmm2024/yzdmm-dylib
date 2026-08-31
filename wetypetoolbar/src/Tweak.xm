@@ -295,7 +295,7 @@ static void wp_hapticBump() {
         wp_loadPrefs();
         wp_resolveLogPath();
         wp_log([NSString stringWithFormat:
-                @"[ctor] WetypePlus 3.0.6 loaded | process=%@ bundle=%@ logPath=%@",
+                @"[ctor] WetypePlus 3.0.7 loaded | process=%@ bundle=%@ logPath=%@",
                 ([[NSProcessInfo processInfo] processName] ?: @"?"),
                 ([[NSBundle mainBundle] bundleIdentifier] ?: @"?"),
                 wp_resolveLogPath()]);
