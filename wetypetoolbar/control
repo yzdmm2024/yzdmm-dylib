@@ -1,8 +1,8 @@
 Package: com.yzdmm.wetypeplus
 Name: WetypePlus
-Version: 2.0.2
+Version: 3.0.0
 Architecture: iphoneos-arm64e
 Maintainer: yzdmm
 Author: yzdmm
 Section: Tweaks
-Description: 微信输入法键盘内叠加工具栏(光标/粘贴/符号)；整体上移键盘内容腾出底部空条，工具栏贴屏幕底边
+Description: 微信输入法键盘上方叠加工具栏(光标/粘贴/符号)；放在键盘顶边之上空隙，不压按键也不占底部安全区

@@ -1,21 +1,19 @@
-// WetypePlus — 直接注入「微信输入法」键盘扩展进程，在键盘自身视图里叠加工具栏。
+// WetypePlus 3.0.0 — 注入微信输入法键盘扩展进程，在「键盘上方」叠加一条工具栏。
 //
-// 为什么改方案：之前在「主 App 进程」里叠 toolbar，但 iOS 键盘是独立进程渲染、
-// 再合成到屏幕最上层——App 窗口内的任何图层都永远在键盘下面，所以之前「什么都不显示 /
-// 只在切 App 时黑底闪一下」。唯一稳的办法是写进键盘进程本身。
+// 布局关键（参考 SquidExtender）：工具栏加在键盘所属的 window 里、键盘顶边之上
+// (y = 键盘顶边.y - WP_BAR_H)，叠在 App 内容之上、属于键盘图层所以不被键盘盖住。
+// 这样既不压键盘任何按键行，也不占底部 home 指示条安全区（那是系统保留、第三方键盘不能用）。
 //
 // 做法：hook UIInputViewController（所有第三方键盘的基类，微信输入法也是它），
-// 把工具栏加进键盘自己的 view；用键盘的 textDocumentProxy 插字/移光标/粘贴。
+// 把工具栏加进键盘 window；用键盘的 textDocumentProxy 插字/移光标/粘贴。
 // 对任意使用微信输入法的 App 都生效。
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 
 #define WP_DOMAIN @"com.yzdmm.wetypeplus"
 #define WP_NOTE   CFSTR("com.yzdmm.wetypeplus.changed")
-// 工具栏高度：34pt。做法：把微信键盘的所有 subview 整体上移 WP_BAR_H（用 transform），
-// 腾出最底部空条给工具栏；功能行(123/空格/中英/搜索)上移后与工具栏刚好相接、不重叠。
-// 代价：键盘最顶部(语音/图标行)会顶出键盘上沿(被系统裁掉或压在输入框上)。
-#define WP_BAR_H 34
+// 工具栏高度：38pt，落在「键盘顶边之上」那道空隙（键盘 window 内、App 内容之上）。
+#define WP_BAR_H 38
 
 static BOOL wp_enabled = YES;
 static BOOL wp_haptic  = YES;
@@ -44,7 +42,7 @@ static void wp_hapticBump() {
 @interface WPToolbar : UIView
 + (WPToolbar *)shared;
 - (void)attachTo:(UIInputViewController *)vc;
-- (void)relayout;
+- (void)relayoutAboveKeyboard;
 @end
 
 @implementation WPToolbar {
@@ -63,8 +61,7 @@ static void wp_hapticBump() {
     self = [super initWithFrame:CGRectMake(0, 0, [UIScreen mainScreen].bounds.size.width, WP_BAR_H)];
     if (self) {
         self.backgroundColor = [UIColor colorWithWhite:0.12 alpha:0.96];
-        self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
-        self.hidden = NO;
+        self.hidden = YES;
         self.userInteractionEnabled = YES;
         _built = NO;
     }
@@ -99,18 +96,21 @@ static void wp_hapticBump() {
 - (void)attachTo:(UIInputViewController *)vc {
     _vc = vc;
     [self buildIfNeeded];
-    if (self.superview != vc.view) [vc.view addSubview:self];
-    [vc.view bringSubviewToFront:self];
-    [self relayout];
 }
 
-- (void)relayout {
+// 放在「键盘上方」：键盘顶边之上 WP_BAR_H 的位置（在键盘 window 内、App 内容之上，不被键盘盖住）。
+- (void)relayoutAboveKeyboard {
     UIInputViewController *vc = _vc;
-    if (!vc || self.superview != vc.view) return;
-    CGFloat w = vc.view.bounds.size.width;
-    CGFloat h = WP_BAR_H;
-    // 贴键盘底边：落在键盘最底部的留白区（home 指示条上方）
-    self.frame = CGRectMake(0, vc.view.bounds.size.height - h, w, h);
+    if (!vc) return;
+    UIWindow *win = vc.view.window;
+    if (!win) return;
+    CGRect kb = vc.view.frame;            // 键盘在 window 中的 frame
+    CGFloat y = kb.origin.y - WP_BAR_H;   // 键盘顶边再往上 WP_BAR_H
+    if (y < 0) y = 0;
+    self.frame = CGRectMake(0, y, win.bounds.size.width, WP_BAR_H);
+    if (self.superview != win) [win addSubview:self];
+    [win bringSubviewToFront:self];
+    self.hidden = NO;
 }
 
 - (void)onTap:(UIButton *)b {
@@ -150,19 +150,8 @@ static void wp_hapticBump() {
 - (void)viewDidLayoutSubviews {
     %orig;
     if (!wp_enabled) return;
-    WPToolbar *t = [WPToolbar shared];
-    if (t.superview != self.view) [self.view addSubview:t];
-
-    // 把微信键盘自己的所有 subview 整体上移 WP_BAR_H（用 transform，不动 frame，
-    // 不和 auto-layout 打架；hit-test 也跟着走）。
-    // 这样微信键盘整体上移 WP_BAR_H，腾出最底部空条给工具栏；
-    // 工具栏贴屏幕底边，与上移后的功能行(123/空格/中英/搜索)刚好相接、不重叠。
-    // 代价：键盘最顶部(语音/图标行)会顶出键盘上沿(被系统裁掉或压在输入框上)。
-    for (UIView *sv in [self.view.subviews copy]) {
-        if (sv == t) continue;
-        sv.transform = CGAffineTransformMakeTranslation(0, -WP_BAR_H);
-    }
-    [t relayout];
+    // 每次布局都重算位置（键盘出现/旋转/切换输入法时自动跟随）。
+    [[WPToolbar shared] relayoutAboveKeyboard];
 }
 
 %end
@@ -171,7 +160,7 @@ static void wp_hapticBump() {
     @autoreleasepool {
         wp_loadPrefs();
         // 诊断：tweak 一旦被注入键盘扩展进程就会写这个文件（含 bundle id + 时间），
-        // 用于确认到底注入了哪个进程（iOS 上微信输入法键盘扩展的 bundle id 未知，靠它反查）。
+        // 用于确认到底注入了哪个进程。
         NSString *mark = [NSString stringWithFormat:@"WetypePlus(KEYBOARD) loaded in %@ at %@\n",
             ([[NSBundle mainBundle] bundleIdentifier] ?: @"?"), [NSDate date]];
         [mark writeToFile:@"/var/mobile/wp_kb_loaded.log" atomically:YES
