@@ -1,0 +1,8 @@
+Package: com.yzdmm.keyboardpluspro
+Name: KeyboardPlusPro
+Version: 1.0.5
+Architecture: iphoneos-arm64e
+Maintainer: yzdmm
+Author: yzdmm
+Section: Tweaks
+Description: Keyboard enhancement - cursor, clipboard, symbol bar, layout, gestures, theme, haptic, caps lock
