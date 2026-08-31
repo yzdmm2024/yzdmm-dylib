@@ -10,7 +10,12 @@
 
 @interface UIKeyboardImpl : UIResponder @end
 @interface UIKeyboard : UIView @end
-@interface UIKeyboardLayout : UIView @end
+@interface UIKeyboardLayout : UIView
+- (void)kbp_layoutSubviews;
+@end
+@interface UIKeyboardLayoutStar : UIKeyboardLayout
+- (void)kbp_layoutSubviews;
+@end
 @interface UIKBKeyView : UIView @end
 @interface UIKBTreeKey : UIKBKeyView @end
 @interface UIKBKey : NSObject @end
