@@ -1,4 +1,4 @@
-// WetypePlus — 在「正在打字的主 App」里、键盘上方叠加一条通用工具栏。
+// WetypePlus — 在「正在打字的主 App」里、键盘底部留白区(spacebar 下方/home-bar 上方)叠加一条通用工具栏。
 // 不进键盘扩展进程（微信输入法闭源+反调试），直接 hook 主 App 的键盘通知，
 // 用第一响应者(输入框)的公开 API 插字/移光标/粘贴/全选。对任意键盘(含微信输入法)都生效。
 #import <UIKit/UIKit.h>
@@ -6,6 +6,9 @@
 
 #define WP_DOMAIN @"com.yzdmm.wetypeplus"
 #define WP_NOTE   CFSTR("com.yzdmm.wetypeplus.changed")
+// 工具栏高度：收紧到 34pt，正好落在键盘最底部的留白(spacebar 下方 / home-bar 上方)，
+// 不压数字行、也不压空格键那一行。
+#define WP_BAR_H 34
 
 static BOOL wp_enabled = YES;
 static BOOL wp_haptic  = YES;
@@ -64,7 +67,7 @@ static void wp_notifyCallback(CFNotificationCenterRef center, void *observer,
 }
 
 - (id)initWithFrame:(CGRect)f {
-    self = [super initWithFrame:CGRectMake(0, 0, [UIScreen mainScreen].bounds.size.width, 44)];
+    self = [super initWithFrame:CGRectMake(0, 0, [UIScreen mainScreen].bounds.size.width, WP_BAR_H)];
     if (self) {
         self.backgroundColor = [UIColor colorWithWhite:0.12 alpha:0.96];
         self.autoresizingMask = UIViewAutoresizingFlexibleWidth;
@@ -83,7 +86,7 @@ static void wp_notifyCallback(CFNotificationCenterRef center, void *observer,
     CGFloat w = self.bounds.size.width / n;
     for (NSUInteger i = 0; i < n; i++) {
         UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
-        b.frame = CGRectMake(w * i, 0, w, 44);
+        b.frame = CGRectMake(w * i, 0, w, WP_BAR_H);
         [b setTitle:titles[i] forState:UIControlStateNormal];
         [b setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
         b.titleLabel.font = [UIFont systemFontOfSize:15];
@@ -91,7 +94,7 @@ static void wp_notifyCallback(CFNotificationCenterRef center, void *observer,
         [b addTarget:self action:@selector(onTap:) forControlEvents:UIControlEventTouchUpInside];
         [self addSubview:b];
         if (i > 0) {
-            UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(w * i, 8, 0.5, 28)];
+            UIView *sep = [[UIView alloc] initWithFrame:CGRectMake(w * i, 6, 0.5, WP_BAR_H - 12)];
             sep.backgroundColor = [UIColor colorWithWhite:1 alpha:0.15];
             [self addSubview:sep];
         }
@@ -134,10 +137,12 @@ static void wp_notifyCallback(CFNotificationCenterRef center, void *observer,
     if (!tew) tew = [UIApplication sharedApplication].keyWindow;
     if (!tew) return;
     if (self.superview != tew) [tew addSubview:self];
-    CGFloat h = 44;
-    // 关键修复：顶边与键盘对齐(叠在键盘“最顶端”)，而不是 keyboard 顶边再往上 44px。
-    // 之前往上挪 44px 正好压在键盘上方的输入框上，导致挡住输入框。
-    self.frame = CGRectMake(kbFrame.origin.x, kbFrame.origin.y, kbFrame.size.width, h);
+    // 工具栏放在键盘「底部空隙」(spacebar 下方 / home-bar 上方那道留白)：
+    // 顶边贴键盘底边，落在键盘最下方的空白里——不挡输入框、也不盖数字行。
+    // 代价：若某键盘底部留白 < WP_BAR_H，会轻微压到空格键那一行最下缘。
+    CGFloat h = WP_BAR_H;
+    CGFloat y = kbFrame.origin.y + kbFrame.size.height - h;
+    self.frame = CGRectMake(kbFrame.origin.x, y, kbFrame.size.width, h);
     self.hidden = NO;
 }
 
