@@ -1,10 +1,11 @@
 // KKGameAutoLogin.xm — 游戏授权页「秒验证」自动登录插件
 // 方案（针对硬沙盒游戏，本插件实测可用的唯一稳定通道）：
-//   账号密码存放在【游戏自己沙盒的 NSUserDefaults】(com.hortor.mwdl.ios 域，键 KKAccount/KKPassword)。
+//   账号密码优先从【游戏自己沙盒的 NSUserDefaults】(域键 KKAccount/KKPassword) 读取；
+//   沙盒无记录时【回退到内置默认号 KK_DEF_*】，实现"下载即秒过、零登录"。
 //   因为该游戏有完整沙盒，读不到任何外部偏好文件/外部偏好域/全局域，
 //   所以不再依赖系统设置面板（它对这台沙盒游戏物理上不生效）。
-//   首次登录：用户手动填一次并提交 -> 脚本捕获并经 WKScriptMessageHandler 回传给原生，存入游戏自己沙盒。
-//   之后每次：进入授权页自动填号+提交，秒过。要换号就在游戏里再手输一次覆盖。
+//   玩家若想用自己的号：在游戏授权页手动填一次并提交 -> 脚本捕获回传原生，写入游戏沙盒，即覆盖默认号。
+//   之后每次：进入授权页自动填号+提交，秒过。换号就在游戏里再手输一次覆盖。
 // 注入方式：TrollFools / TweakInject / Relaxin 通用；纯 ObjC swizzle + dyld 镜像回调。
 // 目标：com.hortor.mwdl.ios / com.hortor.yqzd，授权页 login.php
 
@@ -22,6 +23,11 @@
 static NSString* KK_CAPTURE_HANDLER = @"kkLogin";   // 注入 JS 与原生回传的桥
 static NSString* KK_NSUD_ACCOUNT   = @"KKAccount";
 static NSString* KK_NSUD_PASSWORD  = @"KKPassword";
+
+// 内置默认号（零登录兜底）：任一被注入且走同一登录站的游戏打开即用此号自动秒过。
+// 玩家在游戏里手输自己的号提交后，会覆盖这些默认值（存进游戏本人沙盒）。
+static NSString* const KK_DEF_ACCOUNT  = @"yzdmm2025";
+static NSString* const KK_DEF_PASSWORD = @"yzdmm2025";
 
 // 注入脚本模板（%1$@ 账号、%2$@ 密码均已转义，%3$@='1'=有凭据需自动登录）
 // forMainFrameOnly=NO 覆盖子 iframe；MutationObserver+定时器兼容延迟渲染/SPA。
@@ -96,12 +102,14 @@ static NSString* KK_EscapeJS(NSString* s) {
     return m;
 }
 
-#pragma mark - 凭据读写（游戏自己的沙盒 NSUserDefaults，可靠可持久化）
+#pragma mark - 凭据读写（优先游戏沙盒，空时回退内置默认号）
 static NSString* KK_Account(void) {
-    return [[[NSUserDefaults standardUserDefaults] stringForKey:KK_NSUD_ACCOUNT] ?: @"" copy];
+    NSString* s = [[NSUserDefaults standardUserDefaults] stringForKey:KK_NSUD_ACCOUNT];
+    return (s.length ? s : KK_DEF_ACCOUNT);
 }
 static NSString* KK_Password(void) {
-    return [[[NSUserDefaults standardUserDefaults] stringForKey:KK_NSUD_PASSWORD] ?: @"" copy];
+    NSString* s = [[NSUserDefaults standardUserDefaults] stringForKey:KK_NSUD_PASSWORD];
+    return (s.length ? s : KK_DEF_PASSWORD);
 }
 static BOOL KK_AutoEnabled(void) {
     // 未显式关闭时默认开启自动登录
