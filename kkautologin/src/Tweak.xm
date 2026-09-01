@@ -72,15 +72,38 @@ static NSString* KK_EscapeJS(NSString* s) {
     return m;
 }
 
+// 候选偏好文件路径：设置面板会把配置写入这些位置（roothide 也兼容）
+static NSArray* KK_PrefPaths(void) {
+    return @[
+        @"/var/mobile/Library/Preferences/com.yzdmm.kkgameautologin.plist",
+        @"/var/jb/var/mobile/Library/Preferences/com.yzdmm.kkgameautologin.plist",
+        [NSHomeDirectory() stringByAppendingPathComponent:
+            @"Library/Preferences/com.yzdmm.kkgameautologin.plist"],
+    ];
+}
+static NSDictionary* KK_ReadFileDict(void) {
+    for (NSString* p in KK_PrefPaths()) {
+        NSDictionary* d = [NSDictionary dictionaryWithContentsOfFile:p];
+        if (d && d.count > 0) return d;
+    }
+    return nil;
+}
 static NSString* KK_ReadPref(NSString* key) {
+    NSDictionary* d = KK_ReadFileDict();
+    id v = d ? [d objectForKey:key] : nil;
+    if (v) return [[NSString stringWithFormat:@"%@", v] copy];
+    // 回退：NSUserDefaults suite（兼容无跨进程隔离的注入方式）
     NSUserDefaults* ud = [[NSUserDefaults alloc] initWithSuiteName:KK_PrefsSuite];
     return [[ud stringForKey:key] ?: @"" copy];
 }
 
 static BOOL KK_AutoEnabled(void) {
+    NSDictionary* d = KK_ReadFileDict();
+    id v = d ? [d objectForKey:@"autoLoginEnabled"] : nil;
+    if (v) return [v boolValue];
     NSUserDefaults* ud = [[NSUserDefaults alloc] initWithSuiteName:KK_PrefsSuite];
-    id v = [ud objectForKey:@"autoLoginEnabled"];
-    return (v == nil) ? YES : [v boolValue];
+    id x = [ud objectForKey:@"autoLoginEnabled"];
+    return (x == nil) ? YES : [x boolValue];
 }
 
 static void KK_Auth_InjectInto(WKWebViewConfiguration* cfg) {
