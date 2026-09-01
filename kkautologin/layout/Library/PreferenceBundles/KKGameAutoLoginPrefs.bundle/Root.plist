@@ -10,63 +10,13 @@
             <key>cell</key>
             <string>PSGroupCell</string>
             <key>label</key>
-            <string>登录账号（保存在本机，代码中不含账号）</string>
-        </dict>
-        <dict>
-            <key>cell</key>
-            <string>PSSwitchCell</string>
-            <key>defaults</key>
-            <string>com.yzdmm.kkgameautologin</string>
-            <key>key</key>
-            <string>autoLoginEnabled</string>
-            <key>label</key>
-            <string>自动登录</string>
-            <key>default</key>
-            <true/>
-        </dict>
-        <dict>
-            <key>cell</key>
-            <string>PSEditTextCell</string>
-            <key>defaults</key>
-            <string>com.yzdmm.kkgameautologin</string>
-            <key>key</key>
-            <string>account</string>
-            <key>label</key>
-            <string>账号</string>
-            <key>placeholder</key>
-            <string>请输入账号</string>
-            <key>keyboardType</key>
-            <string>ASCIICapable</string>
-            <key>autocapitalizationType</key>
-            <string>None</string>
-            <key>autocorrectionType</key>
-            <string>No</string>
-        </dict>
-        <dict>
-            <key>cell</key>
-            <string>PSEditTextCell</string>
-            <key>defaults</key>
-            <string>com.yzdmm.kkgameautologin</string>
-            <key>key</key>
-            <string>password</string>
-            <key>label</key>
-            <string>密码</string>
-            <key>placeholder</key>
-            <string>请输入密码</string>
-            <key>isSecure</key>
-            <true/>
-        </dict>
-        <dict>
-            <key>cell</key>
-            <string>PSGroupCell</string>
-            <key>label</key>
-            <string>操作说明</string>
+            <string>使用说明</string>
         </dict>
         <dict>
             <key>cell</key>
             <string>PSTitleValueCell</string>
             <key>label</key>
-            <string>打开游戏授权页，自动填入并提交，秒过验证</string>
+            <string>此游戏为沙盒应用，无法读取系统设置，故配置在游戏内保存。首次请打开游戏在授权页手动登录一次，插件会自动记住账号密码；之后每次打开自动填入并提交，秒过验证。需要更换账号时，在游戏里重新登录一次即可覆盖。</string>
         </dict>
         <dict>
             <key>cell</key>
